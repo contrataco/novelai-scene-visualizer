@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://*.novelai.net; script-src 'self' 'unsafe-inline' https://*.novelai.net; style-src 'self' 'unsafe-inline' https://*.novelai.net; img-src 'self' data: https://*.novelai.net blob:; connect-src 'self' https://*.novelai.net wss://*.novelai.net;">
+  <title>NovelAI Scene Visualizer</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .toolbar {
+      background: #16213e;
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid #0f3460;
+      flex-shrink: 0;
+    }
+
+    .toolbar h1 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #e94560;
+    }
+
+    .toolbar button {
+      background: #0f3460;
+      border: none;
+      color: #eee;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: background 0.2s;
+    }
+
+    .toolbar button:hover {
+      background: #e94560;
+    }
+
+    .toolbar button.primary {
+      background: #e94560;
+    }
+
+    .toolbar button.primary:hover {
+      background: #ff6b8a;
+    }
+
+    .toolbar button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .status {
+      margin-left: auto;
+      font-size: 12px;
+      color: #888;
+    }
+
+    .status.connected {
+      color: #4ade80;
+    }
+
+    .status.generating {
+      color: #fbbf24;
+    }
+
+    .status.error {
+      color: #ef4444;
+    }
+
+    .main-container {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    .webview-container {
+      flex: 1;
+      position: relative;
+    }
+
+    webview {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Image Panel */
+    .image-panel {
+      width: 320px;
+      background: #16213e;
+      border-left: 1px solid #0f3460;
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .image-panel.hidden {
+      display: none;
+    }
+
+    .image-panel-header {
+      padding: 12px;
+      border-bottom: 1px solid #0f3460;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .image-panel-header h2 {
+      font-size: 14px;
+      color: #e94560;
+    }
+
+    .image-panel-header button {
+      background: transparent;
+      border: none;
+      color: #888;
+      cursor: pointer;
+      font-size: 18px;
+    }
+
+    .image-panel-content {
+      flex: 1;
+      padding: 12px;
+      overflow-y: auto;
+    }
+
+    .scene-image {
+      width: 100%;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+
+    .scene-image.placeholder {
+      background: #0f3460;
+      aspect-ratio: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #888;
+      font-size: 14px;
+    }
+
+    .prompt-display {
+      background: #0f3460;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 11px;
+      color: #aaa;
+      line-height: 1.4;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+
+    .prompt-label {
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 8px;
+    }
+
+    /* Loading spinner */
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: #fbbf24;
+      padding: 20px;
+    }
+
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2px solid #fbbf24;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Settings Modal */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal.active {
+      display: flex;
+    }
+
+    .modal-content {
+      background: #16213e;
+      padding: 24px;
+      border-radius: 8px;
+      width: 500px;
+      max-width: 90%;
+      max-height: 85vh;
+      overflow-y: auto;
+    }
+
+    .modal h2 {
+      margin-bottom: 16px;
+      color: #e94560;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 12px;
+      color: #888;
+    }
+
+    .form-group input,
+    .form-group select {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #0f3460;
+      border-radius: 4px;
+      background: #1a1a2e;
+      color: #eee;
+      font-size: 14px;
+    }
+
+    .form-group input:focus,
+    .form-group select:focus {
+      outline: none;
+      border-color: #e94560;
+    }
+
+    .form-group select {
+      cursor: pointer;
+    }
+
+    .form-group select option {
+      background: #1a1a2e;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 12px;
+    }
+
+    .form-row .form-group {
+      flex: 1;
+    }
+
+    .form-group.checkbox {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .form-group.checkbox input {
+      width: auto;
+    }
+
+    .form-group.checkbox label {
+      margin-bottom: 0;
+      color: #eee;
+      font-size: 13px;
+    }
+
+    .settings-section {
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #0f3460;
+    }
+
+    .settings-section:last-of-type {
+      border-bottom: none;
+      margin-bottom: 12px;
+    }
+
+    .settings-section h3 {
+      font-size: 13px;
+      color: #e94560;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .slider-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .slider-group input[type="range"] {
+      flex: 1;
+      -webkit-appearance: none;
+      height: 4px;
+      background: #0f3460;
+      border-radius: 2px;
+      padding: 0;
+    }
+
+    .slider-group input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      background: #e94560;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+
+    .slider-value {
+      min-width: 40px;
+      text-align: right;
+      font-size: 13px;
+      color: #aaa;
+    }
+
+    .v3-only {
+      transition: opacity 0.2s;
+    }
+
+    .v3-only.disabled {
+      opacity: 0.4;
+      pointer-events: none;
+    }
+
+    .modal-buttons {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .modal-buttons button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .modal-buttons .save {
+      background: #e94560;
+      color: white;
+    }
+
+    .modal-buttons .cancel {
+      background: #0f3460;
+      color: #eee;
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <h1>Scene Visualizer</h1>
+    <button id="generateBtn" class="primary">Generate Scene</button>
+    <button id="togglePanelBtn">Toggle Panel</button>
+    <button id="settingsBtn">Settings</button>
+    <button id="reloadBtn">Reload</button>
+    <span class="status" id="status">Initializing...</span>
+  </div>
+
+  <div class="main-container">
+    <div class="webview-container">
+      <webview
+        id="novelai"
+        src="https://novelai.net"
+        partition="persist:novelai"
+        allowpopups
+      ></webview>
+    </div>
+
+    <div class="image-panel" id="imagePanel">
+      <div class="image-panel-header">
+        <h2>Scene Image</h2>
+        <button id="closePanelBtn">&times;</button>
+      </div>
+      <div class="image-panel-content">
+        <div id="imageContainer">
+          <div class="scene-image placeholder">
+            Click "Generate Scene" to create an image
+          </div>
+        </div>
+        <div id="loadingIndicator" class="loading" style="display: none;">
+          <div class="spinner"></div>
+          <span>Generating...</span>
+        </div>
+        <div class="prompt-label">Current Prompt:</div>
+        <div class="prompt-display" id="promptDisplay">
+          No prompt yet. The NovelAI script will generate prompts as you write.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="modal" id="settingsModal">
+    <div class="modal-content">
+      <h2>Settings</h2>
+
+      <!-- API Token Section -->
+      <div class="settings-section">
+        <h3>Authentication</h3>
+        <div class="form-group">
+          <label>NovelAI API Token</label>
+          <input type="password" id="apiToken" placeholder="Enter your persistent API token">
+        </div>
+      </div>
+
+      <!-- Model Selection -->
+      <div class="settings-section">
+        <h3>Model</h3>
+        <div class="form-group">
+          <label>Image Model</label>
+          <select id="model">
+            <option value="nai-diffusion-4-5-curated">NAI Diffusion V4.5 Curated</option>
+            <option value="nai-diffusion-4-5-full">NAI Diffusion V4.5 Full</option>
+            <option value="nai-diffusion-4-curated-preview">NAI Diffusion V4 Curated</option>
+            <option value="nai-diffusion-4-full">NAI Diffusion V4 Full</option>
+            <option value="nai-diffusion-3">NAI Diffusion Anime V3</option>
+            <option value="nai-diffusion-furry-3">NAI Diffusion Furry V3</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Resolution -->
+      <div class="settings-section">
+        <h3>Resolution</h3>
+        <div class="form-group">
+          <label>Preset</label>
+          <select id="resolutionPreset">
+            <option value="square-sm">Square Small (640×640)</option>
+            <option value="square">Square (832×832)</option>
+            <option value="portrait-sm">Portrait Small (512×768)</option>
+            <option value="portrait">Portrait (832×1216)</option>
+            <option value="landscape-sm">Landscape Small (768×512)</option>
+            <option value="landscape">Landscape (1216×832)</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Width</label>
+            <input type="number" id="imgWidth" value="832" min="256" max="1536" step="64">
+          </div>
+          <div class="form-group">
+            <label>Height</label>
+            <input type="number" id="imgHeight" value="1216" min="256" max="1536" step="64">
+          </div>
+        </div>
+      </div>
+
+      <!-- Generation Parameters -->
+      <div class="settings-section">
+        <h3>Generation</h3>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Sampler</label>
+            <select id="sampler">
+              <option value="k_euler">Euler</option>
+              <option value="k_euler_ancestral">Euler Ancestral</option>
+              <option value="k_dpmpp_2s_ancestral">DPM++ 2S Ancestral</option>
+              <option value="k_dpmpp_2m_sde">DPM++ 2M SDE</option>
+              <option value="k_dpmpp_2m">DPM++ 2M</option>
+              <option value="k_dpmpp_sde">DPM++ SDE</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Noise Schedule</label>
+            <select id="noiseSchedule">
+              <option value="karras">Karras</option>
+              <option value="native">Native</option>
+              <option value="exponential">Exponential</option>
+              <option value="polyexponential">Polyexponential</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Steps</label>
+            <input type="number" id="steps" value="28" min="1" max="50">
+          </div>
+          <div class="form-group">
+            <label>Guidance (CFG)</label>
+            <input type="number" id="scale" value="5" min="1" max="20" step="0.5">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>CFG Rescale</label>
+          <div class="slider-group">
+            <input type="range" id="cfgRescale" min="0" max="1" step="0.05" value="0">
+            <span class="slider-value" id="cfgRescaleValue">0</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- V3-Only Options -->
+      <div class="settings-section v3-only" id="v3Options">
+        <h3>V3 Options (SMEA)</h3>
+        <div class="form-row">
+          <div class="form-group checkbox">
+            <input type="checkbox" id="smea">
+            <label for="smea">SMEA</label>
+          </div>
+          <div class="form-group checkbox">
+            <input type="checkbox" id="smeaDyn">
+            <label for="smeaDyn">SMEA DYN</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quality Options -->
+      <div class="settings-section">
+        <h3>Quality</h3>
+        <div class="form-group">
+          <label>UC Preset (Negative Prompt Base)</label>
+          <select id="ucPreset">
+            <option value="heavy">Heavy (More detailed exclusions)</option>
+            <option value="light">Light (Minimal exclusions)</option>
+          </select>
+        </div>
+        <div class="form-group checkbox">
+          <input type="checkbox" id="qualityTags" checked>
+          <label for="qualityTags">Add Quality Tags to Prompt</label>
+        </div>
+      </div>
+
+      <div class="modal-buttons">
+        <button class="cancel" id="cancelBtn">Cancel</button>
+        <button class="save" id="saveBtn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const webview = document.getElementById('novelai');
+    const status = document.getElementById('status');
+    const settingsModal = document.getElementById('settingsModal');
+    const imagePanel = document.getElementById('imagePanel');
+    const imageContainer = document.getElementById('imageContainer');
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    const promptDisplay = document.getElementById('promptDisplay');
+
+    // Buttons
+    const generateBtn = document.getElementById('generateBtn');
+    const togglePanelBtn = document.getElementById('togglePanelBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const reloadBtn = document.getElementById('reloadBtn');
+    const closePanelBtn = document.getElementById('closePanelBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const saveBtn = document.getElementById('saveBtn');
+
+    // Settings elements
+    const modelSelect = document.getElementById('model');
+    const resolutionPreset = document.getElementById('resolutionPreset');
+    const imgWidth = document.getElementById('imgWidth');
+    const imgHeight = document.getElementById('imgHeight');
+    const samplerSelect = document.getElementById('sampler');
+    const noiseScheduleSelect = document.getElementById('noiseSchedule');
+    const stepsInput = document.getElementById('steps');
+    const scaleInput = document.getElementById('scale');
+    const cfgRescaleSlider = document.getElementById('cfgRescale');
+    const cfgRescaleValue = document.getElementById('cfgRescaleValue');
+    const smeaCheckbox = document.getElementById('smea');
+    const smeaDynCheckbox = document.getElementById('smeaDyn');
+    const ucPresetSelect = document.getElementById('ucPreset');
+    const qualityTagsCheckbox = document.getElementById('qualityTags');
+    const v3Options = document.getElementById('v3Options');
+
+    let currentPrompt = '';
+    let isGenerating = false;
+
+    // Resolution presets
+    const RESOLUTION_PRESETS = {
+      'square-sm': { width: 640, height: 640 },
+      'square': { width: 832, height: 832 },
+      'portrait-sm': { width: 512, height: 768 },
+      'portrait': { width: 832, height: 1216 },
+      'landscape-sm': { width: 768, height: 512 },
+      'landscape': { width: 1216, height: 832 },
+    };
+
+    // V4 models list (for disabling SMEA)
+    const V4_MODELS = [
+      'nai-diffusion-4-curated-preview',
+      'nai-diffusion-4-full',
+      'nai-diffusion-4-5-curated',
+      'nai-diffusion-4-5-full'
+    ];
+
+    // Update V3 options visibility based on model
+    function updateV3Options() {
+      const isV4 = V4_MODELS.includes(modelSelect.value);
+      v3Options.classList.toggle('disabled', isV4);
+      if (isV4) {
+        smeaCheckbox.checked = false;
+        smeaDynCheckbox.checked = false;
+      }
+    }
+
+    // Handle resolution preset change
+    resolutionPreset.addEventListener('change', () => {
+      const preset = RESOLUTION_PRESETS[resolutionPreset.value];
+      if (preset) {
+        imgWidth.value = preset.width;
+        imgHeight.value = preset.height;
+      }
+    });
+
+    // Handle width/height manual change -> switch to custom
+    imgWidth.addEventListener('change', () => {
+      const matchingPreset = Object.entries(RESOLUTION_PRESETS).find(
+        ([key, p]) => p.width === parseInt(imgWidth.value) && p.height === parseInt(imgHeight.value)
+      );
+      resolutionPreset.value = matchingPreset ? matchingPreset[0] : 'custom';
+    });
+
+    imgHeight.addEventListener('change', () => {
+      const matchingPreset = Object.entries(RESOLUTION_PRESETS).find(
+        ([key, p]) => p.width === parseInt(imgWidth.value) && p.height === parseInt(imgHeight.value)
+      );
+      resolutionPreset.value = matchingPreset ? matchingPreset[0] : 'custom';
+    });
+
+    // Handle CFG rescale slider
+    cfgRescaleSlider.addEventListener('input', () => {
+      cfgRescaleValue.textContent = cfgRescaleSlider.value;
+    });
+
+    // Handle model change
+    modelSelect.addEventListener('change', updateV3Options);
+
+    // Webview events
+    webview.addEventListener('did-start-loading', () => {
+      status.textContent = 'Loading...';
+      status.className = 'status';
+    });
+
+    webview.addEventListener('did-finish-load', () => {
+      status.textContent = 'Connected';
+      status.className = 'status connected';
+    });
+
+    webview.addEventListener('did-fail-load', (e) => {
+      status.textContent = 'Failed to load';
+      status.className = 'status error';
+      console.error('Webview load failed:', e);
+    });
+
+    // Generate Scene button
+    generateBtn.addEventListener('click', async () => {
+      if (isGenerating) return;
+
+      // Try to read the prompt from the NovelAI page
+      try {
+        // Execute script in webview to find the prompt textarea
+        const result = await webview.executeJavaScript(`
+          (function() {
+            // Look for the Scene Visualizer panel's textarea
+            const textareas = document.querySelectorAll('textarea');
+            for (const ta of textareas) {
+              const val = ta.value || '';
+              if (val.length > 20 && !val.startsWith('(No prompt')) {
+                return val;
+              }
+            }
+            return null;
+          })()
+        `);
+
+        if (result) {
+          currentPrompt = result;
+          promptDisplay.textContent = currentPrompt;
+          await generateImage(currentPrompt);
+        } else {
+          status.textContent = 'No prompt found - generate story content first';
+          status.className = 'status error';
+          setTimeout(() => {
+            status.textContent = 'Connected';
+            status.className = 'status connected';
+          }, 3000);
+        }
+      } catch (e) {
+        console.error('Error reading prompt:', e);
+        status.textContent = 'Error reading prompt';
+        status.className = 'status error';
+      }
+    });
+
+    async function generateImage(prompt) {
+      isGenerating = true;
+      generateBtn.disabled = true;
+      status.textContent = 'Generating...';
+      status.className = 'status generating';
+      loadingIndicator.style.display = 'flex';
+
+      try {
+        const result = await window.sceneVisualizer.generateImage(prompt, '');
+
+        if (result.success) {
+          imageContainer.innerHTML = `<img src="${result.imageData}" class="scene-image" alt="Generated scene">`;
+          status.textContent = 'Image ready';
+          status.className = 'status connected';
+        } else {
+          status.textContent = 'Generation failed: ' + result.error;
+          status.className = 'status error';
+          console.error('Generation failed:', result.error);
+        }
+      } catch (e) {
+        status.textContent = 'Error: ' + e.message;
+        status.className = 'status error';
+        console.error('Error:', e);
+      } finally {
+        isGenerating = false;
+        generateBtn.disabled = false;
+        loadingIndicator.style.display = 'none';
+
+        setTimeout(() => {
+          if (status.textContent.startsWith('Image ready') || status.textContent.startsWith('Generation failed') || status.textContent.startsWith('Error')) {
+            status.textContent = 'Connected';
+            status.className = 'status connected';
+          }
+        }, 5000);
+      }
+    }
+
+    // Toggle panel
+    togglePanelBtn.addEventListener('click', () => {
+      imagePanel.classList.toggle('hidden');
+    });
+
+    closePanelBtn.addEventListener('click', () => {
+      imagePanel.classList.add('hidden');
+    });
+
+    // Settings
+    settingsBtn.addEventListener('click', async () => {
+      const token = await window.sceneVisualizer.getApiToken();
+      const settings = await window.sceneVisualizer.getImageSettings();
+
+      // API Token
+      document.getElementById('apiToken').value = '';
+      document.getElementById('apiToken').placeholder = token ? 'Token configured (enter new to replace)' : 'Enter your persistent API token';
+
+      // Model
+      modelSelect.value = settings.model || 'nai-diffusion-4-curated-preview';
+
+      // Resolution
+      imgWidth.value = settings.width || 832;
+      imgHeight.value = settings.height || 1216;
+
+      // Find matching preset
+      const matchingPreset = Object.entries(RESOLUTION_PRESETS).find(
+        ([key, p]) => p.width === settings.width && p.height === settings.height
+      );
+      resolutionPreset.value = matchingPreset ? matchingPreset[0] : 'custom';
+
+      // Generation parameters
+      samplerSelect.value = settings.sampler || 'k_euler';
+      noiseScheduleSelect.value = settings.noiseSchedule || 'karras';
+      stepsInput.value = settings.steps || 28;
+      scaleInput.value = settings.scale || 5;
+      cfgRescaleSlider.value = settings.cfgRescale || 0;
+      cfgRescaleValue.textContent = settings.cfgRescale || 0;
+
+      // V3 options (SMEA)
+      smeaCheckbox.checked = settings.smea || false;
+      smeaDynCheckbox.checked = settings.smeaDyn || false;
+
+      // Quality options
+      ucPresetSelect.value = settings.ucPreset || 'heavy';
+      qualityTagsCheckbox.checked = settings.qualityTags !== false; // Default true
+
+      // Update V3 options visibility
+      updateV3Options();
+
+      settingsModal.classList.add('active');
+    });
+
+    cancelBtn.addEventListener('click', () => {
+      settingsModal.classList.remove('active');
+    });
+
+    saveBtn.addEventListener('click', async () => {
+      const token = document.getElementById('apiToken').value;
+      if (token) {
+        await window.sceneVisualizer.setApiToken(token);
+      }
+
+      await window.sceneVisualizer.setImageSettings({
+        // Model
+        model: modelSelect.value,
+        // Resolution
+        width: parseInt(imgWidth.value),
+        height: parseInt(imgHeight.value),
+        // Generation parameters
+        sampler: samplerSelect.value,
+        noiseSchedule: noiseScheduleSelect.value,
+        steps: parseInt(stepsInput.value),
+        scale: parseFloat(scaleInput.value),
+        cfgRescale: parseFloat(cfgRescaleSlider.value),
+        // V3 options
+        smea: smeaCheckbox.checked,
+        smeaDyn: smeaDynCheckbox.checked,
+        // Quality options
+        ucPreset: ucPresetSelect.value,
+        qualityTags: qualityTagsCheckbox.checked
+      });
+
+      settingsModal.classList.remove('active');
+      status.textContent = 'Settings saved';
+      status.className = 'status connected';
+      setTimeout(() => {
+        status.textContent = 'Connected';
+        status.className = 'status connected';
+      }, 2000);
+    });
+
+    reloadBtn.addEventListener('click', () => {
+      webview.reload();
+    });
+
+    // Close modal on escape
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        settingsModal.classList.remove('active');
+      }
+    });
+
+    // Periodically try to read the prompt from NovelAI
+    setInterval(async () => {
+      if (!isGenerating) {
+        try {
+          const result = await webview.executeJavaScript(`
+            (function() {
+              const textareas = document.querySelectorAll('textarea');
+              for (const ta of textareas) {
+                const val = ta.value || '';
+                if (val.length > 20 && !val.startsWith('(No prompt')) {
+                  return val;
+                }
+              }
+              return null;
+            })()
+          `);
+
+          if (result && result !== currentPrompt) {
+            currentPrompt = result;
+            promptDisplay.textContent = currentPrompt;
+          }
+        } catch (e) {
+          // Ignore errors during polling
+        }
+      }
+    }, 3000);
+  </script>
+</body>
+</html>
