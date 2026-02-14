@@ -1,13 +1,31 @@
 const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('path');
-const AdmZip = require('adm-zip');
+const fs = require('fs');
 const Store = require('electron-store');
 
-// Secure storage for API token
+// Providers
+const novelaiProvider = require('./providers/novelai');
+const perchanceProvider = require('./providers/perchance');
+const { extractPerchanceKey, verifyPerchanceKey } = require('./perchance-key');
+const storyboard = require('./storyboard');
+
+const PROVIDERS = {
+  [novelaiProvider.id]: novelaiProvider,
+  [perchanceProvider.id]: perchanceProvider,
+};
+
+// Secure storage for API token and settings
 const store = new Store({
   encryptionKey: 'novelai-scene-visualizer-key',
   schema: {
     apiToken: { type: 'string', default: '' },
+    novelaiEmail: { type: 'string', default: '' },
+    novelaiPassword: { type: 'string', default: '' },
+    provider: { type: 'string', default: 'novelai' },
+    perchanceUserKey: { type: 'string', default: '' },
+    novelaiArtStyle: { type: 'string', default: 'no-style' },
+    perchanceArtStyle: { type: 'string', default: 'no-style' },
+    perchanceGuidanceScale: { type: 'number', default: 7 },
     imageSettings: {
       type: 'object',
       default: {
@@ -34,56 +52,10 @@ const store = new Store({
   }
 });
 
-// Model configurations
-const MODEL_CONFIG = {
-  // V3 Models (support SMEA)
-  'nai-diffusion-3': { isV4: false, name: 'NAI Diffusion Anime V3' },
-  'nai-diffusion-furry-3': { isV4: false, name: 'NAI Diffusion Furry V3' },
-  // V4 Models
-  'nai-diffusion-4-curated-preview': { isV4: true, name: 'NAI Diffusion V4 Curated' },
-  'nai-diffusion-4-full': { isV4: true, name: 'NAI Diffusion V4 Full' },
-  // V4.5 Models
-  'nai-diffusion-4-5-curated': { isV4: true, name: 'NAI Diffusion V4.5 Curated' },
-  'nai-diffusion-4-5-full': { isV4: true, name: 'NAI Diffusion V4.5 Full' },
-};
-
-// Quality presets per model
-const QUALITY_PRESETS = {
-  'nai-diffusion-3': ', best quality, amazing quality, very aesthetic, absurdres',
-  'nai-diffusion-furry-3': ', {best quality}, {amazing quality}',
-  'nai-diffusion-4-curated-preview': ', rating:general, best quality, very aesthetic, absurdres',
-  'nai-diffusion-4-full': ', no text, best quality, very aesthetic, absurdres',
-  'nai-diffusion-4-5-curated': ', very aesthetic, masterpiece, no text, rating:general',
-  'nai-diffusion-4-5-full': ', very aesthetic, masterpiece, no text',
-};
-
-// Negative prompt presets
-const UC_PRESETS = {
-  'nai-diffusion-3': {
-    heavy: 'lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract],',
-    light: 'lowres, jpeg artifacts, worst quality, watermark, blurry, very displeasing,',
-  },
-  'nai-diffusion-furry-3': {
-    heavy: '{{worst quality}}, [displeasing], {unusual pupils}, guide lines, {{unfinished}}, {bad}, url, artist name, {{tall image}}, mosaic, {sketch page}, comic panel, impact (font), [dated], {logo}, ych,',
-    light: '{worst quality}, guide lines, unfinished, bad, url, tall image, widescreen, compression artifacts,',
-  },
-  'nai-diffusion-4-curated-preview': {
-    heavy: 'blurry, lowres, error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, logo, dated, signature, multiple views, gigantic breasts, white blank page, blank page,',
-    light: 'blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, logo, dated, signature, white blank page, blank page,',
-  },
-  'nai-diffusion-4-full': {
-    heavy: 'blurry, lowres, error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, too many watermarks, white blank page, blank page,',
-    light: 'blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, white blank page, blank page,',
-  },
-  'nai-diffusion-4-5-curated': {
-    heavy: 'blurry, lowres, upscaled, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, halftone, multiple views, logo, too many watermarks, negative space, blank page,',
-    light: 'blurry, lowres, upscaled, artistic error, scan artifacts, jpeg artifacts, logo, too many watermarks, negative space, blank page,',
-  },
-  'nai-diffusion-4-5-full': {
-    heavy: 'lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page,',
-    light: 'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page,',
-  },
-};
+function getActiveProvider() {
+  const id = store.get('provider') || 'novelai';
+  return PROVIDERS[id] || PROVIDERS.novelai;
+}
 
 let mainWindow;
 
@@ -103,158 +75,212 @@ function createWindow() {
   // Load the wrapper HTML that contains the webview
   mainWindow.loadFile('renderer/index.html');
 
+  // Inject webview preload for bridge communication
+  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    webPreferences.preload = path.join(__dirname, 'webview-preload.js');
+  });
+
   // Open DevTools in development
   if (process.argv.includes('--enable-logging')) {
     mainWindow.webContents.openDevTools();
   }
 }
 
-// Image generation API call
-async function generateImage(prompt, negativePrompt = '') {
-  const apiToken = store.get('apiToken');
+// Token auto-extraction from NovelAI webview session
+function setupTokenInterception() {
+  const novelaiSession = session.fromPartition('persist:novelai');
 
-  if (!apiToken) {
-    throw new Error('No API token configured. Please set your NovelAI API token.');
-  }
-
-  const settings = store.get('imageSettings');
-  const model = settings.model || 'nai-diffusion-4-curated-preview';
-  const modelConfig = MODEL_CONFIG[model] || { isV4: true };
-  const seed = Math.floor(Math.random() * 4294967295);
-
-  // Get UC preset for model
-  const ucPresets = UC_PRESETS[model] || UC_PRESETS['nai-diffusion-4-curated-preview'];
-  const ucPreset = settings.ucPreset || 'heavy';
-  const baseNegative = ucPresets[ucPreset] || ucPresets.heavy;
-  const finalNegative = negativePrompt ? negativePrompt + ', ' + baseNegative : baseNegative;
-
-  // Get quality tags for model
-  const qualityTags = settings.qualityTags ? (QUALITY_PRESETS[model] || '') : '';
-  const finalPrompt = prompt + qualityTags;
-
-  console.log(`[Main] Using model: ${model}, isV4: ${modelConfig.isV4}`);
-
-  // Build request body
-  const requestBody = {
-    model: model,
-    action: 'generate',
-    input: finalPrompt,
-    parameters: {
-      width: settings.width,
-      height: settings.height,
-      steps: settings.steps,
-      scale: settings.scale,
-      sampler: settings.sampler,
-      n_samples: 1,
-      seed: seed,
-      negative_prompt: finalNegative,
-      cfg_rescale: settings.cfgRescale || 0,
-      noise_schedule: settings.noiseSchedule || 'karras',
-    }
-  };
-
-  // Add model-specific parameters
-  if (modelConfig.isV4) {
-    // V4/V4.5 specific parameters
-    Object.assign(requestBody.parameters, {
-      params_version: 3,
-      legacy: false,
-      legacy_uc: false,
-      legacy_v3_extend: false,
-      controlnet_strength: 1,
-      dynamic_thresholding: true,
-      skip_cfg_above_sigma: null,
-      qualityToggle: settings.qualityTags,
-      sm: false,
-      sm_dyn: false,
-      autoSmea: false,
-      use_coords: false,
-      prefer_brownian: true,
-      deliberate_euler_ancestral_bug: false,
-      // V4 prompt structures (required)
-      v4_prompt: {
-        use_coords: false,
-        use_order: true,
-        caption: {
-          base_caption: finalPrompt,
-          char_captions: []
-        }
-      },
-      v4_negative_prompt: {
-        legacy_uc: false,
-        caption: {
-          base_caption: finalNegative,
-          char_captions: []
+  novelaiSession.webRequest.onBeforeSendHeaders(
+    { urls: ['*://api.novelai.net/*', '*://*.novelai.net/api/*'] },
+    (details, callback) => {
+      const authHeader = details.requestHeaders['Authorization'] ||
+                          details.requestHeaders['authorization'];
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        if (token !== store.get('apiToken')) {
+          store.set('apiToken', token);
+          console.log('[Main] NovelAI token auto-captured from webview session');
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('token-status-changed', { hasToken: true });
+          }
         }
       }
-    });
-  } else {
-    // V3 specific parameters (supports SMEA)
-    Object.assign(requestBody.parameters, {
-      legacy: false,
-      qualityToggle: settings.qualityTags,
-      sm: settings.smea || false,
-      sm_dyn: settings.smeaDyn || false,
-    });
+      callback({ cancel: false, requestHeaders: details.requestHeaders });
+    }
+  );
+}
+
+// Relay prompts from webview to renderer
+ipcMain.on('prompt-from-webview', (event, data) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('prompt-update', data);
   }
+});
 
-  console.log('[Main] Generating image with prompt:', prompt.substring(0, 100) + '...');
+// Relay suggestions from webview to renderer
+ipcMain.on('suggestions-from-webview', (event, data) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('suggestions-update', data);
+  }
+});
 
+// Token status query
+ipcMain.handle('get-token-status', () => ({ hasToken: !!store.get('apiToken') }));
+
+// Clear webview cache (NovelAI partition)
+ipcMain.handle('clear-webview-cache', async () => {
+  const novelaiSession = session.fromPartition('persist:novelai');
+  await novelaiSession.clearCache();
+  await novelaiSession.clearStorageData({ storages: ['cachestorage', 'serviceworkers'] });
+  console.log('[Main] Webview cache cleared');
+  return { success: true };
+});
+
+// Load .env file (simple parser, no dependency)
+function loadEnvCredentials() {
+  const envPath = path.join(__dirname, '.env');
   try {
-    const response = await fetch('https://image.novelai.net/ai/generate-image', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/zip'
-      },
-      body: JSON.stringify(requestBody)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`API Error ${response.status}: ${errorText}`);
+    if (!fs.existsSync(envPath)) return {};
+    const content = fs.readFileSync(envPath, 'utf-8');
+    const vars = {};
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx === -1) continue;
+      const key = trimmed.substring(0, eqIdx).trim();
+      const val = trimmed.substring(eqIdx + 1).trim();
+      vars[key] = val;
     }
-
-    // Response is a ZIP file containing the image
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const zip = new AdmZip(buffer);
-    const zipEntries = zip.getEntries();
-
-    // Find the image file in the ZIP
-    const imageEntry = zipEntries.find(entry =>
-      entry.entryName.endsWith('.png') || entry.entryName.endsWith('.jpg')
-    );
-
-    if (!imageEntry) {
-      throw new Error('No image found in response');
-    }
-
-    // Extract and convert to base64
-    const imageBuffer = imageEntry.getData();
-    const base64 = imageBuffer.toString('base64');
-    const mimeType = imageEntry.entryName.endsWith('.png') ? 'image/png' : 'image/jpeg';
-
-    console.log('[Main] Image generated successfully');
-    return `data:${mimeType};base64,${base64}`;
-
-  } catch (error) {
-    console.error('[Main] Image generation failed:', error);
-    throw error;
+    return vars;
+  } catch (e) {
+    console.log('[Main] Could not read .env:', e.message);
+    return {};
   }
 }
 
-// IPC Handlers
+// Get NovelAI credentials (.env primary, store fallback)
+ipcMain.handle('get-novelai-credentials', () => {
+  const env = loadEnvCredentials();
+  const email = env.NOVELAI_EMAIL || store.get('novelaiEmail') || '';
+  const password = env.NOVELAI_PASSWORD || store.get('novelaiPassword') || '';
+  return { email, password, hasCredentials: !!(email && password) };
+});
+
+// Save NovelAI credentials to store
+ipcMain.handle('set-novelai-credentials', (event, { email, password }) => {
+  if (email !== undefined) store.set('novelaiEmail', email);
+  if (password !== undefined) store.set('novelaiPassword', password);
+  return { success: true };
+});
+
+// IPC Handlers — Image generation (delegates to active provider)
 ipcMain.handle('generate-image', async (event, { prompt, negativePrompt }) => {
   try {
-    const imageData = await generateImage(prompt, negativePrompt);
-    return { success: true, imageData };
+    const provider = getActiveProvider();
+    console.log(`[Main] Generating via ${provider.name}...`);
+    const imageData = await provider.generate(prompt, negativePrompt, store);
+    const settings = store.get('imageSettings');
+    return {
+      success: true,
+      imageData,
+      meta: {
+        provider: provider.id,
+        model: settings.model || '',
+        resolution: { width: settings.width || 832, height: settings.height || 1216 },
+      },
+    };
   } catch (error) {
+    console.error('[Main] Image generation failed:', error);
     return { success: false, error: error.message };
   }
 });
 
+// IPC Handlers — Models (delegates to active provider)
+ipcMain.handle('get-models', () => {
+  return getActiveProvider().getModels();
+});
+
+// IPC Handlers — Provider management
+ipcMain.handle('get-provider', () => {
+  return store.get('provider') || 'novelai';
+});
+
+ipcMain.handle('set-provider', (event, providerId) => {
+  if (!PROVIDERS[providerId]) {
+    return { success: false, error: `Unknown provider: ${providerId}` };
+  }
+  store.set('provider', providerId);
+  return { success: true };
+});
+
+ipcMain.handle('get-providers', () => {
+  return Object.values(PROVIDERS).map(p => ({ id: p.id, name: p.name }));
+});
+
+// IPC Handlers — Perchance key extraction
+ipcMain.handle('extract-perchance-key', async () => {
+  try {
+    const key = await extractPerchanceKey(store);
+    return { success: !!key, hasKey: !!key };
+  } catch (error) {
+    console.error('[Main] Perchance key extraction failed:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-perchance-key-status', async () => {
+  const key = store.get('perchanceUserKey');
+  if (!key) return { hasKey: false, preview: '' };
+  const status = await verifyPerchanceKey(key);
+  if (status === 'not_verified') {
+    // Only clear on definitive "not_verified" from the API (not CF blocks)
+    store.set('perchanceUserKey', '');
+    return { hasKey: false, preview: '', expired: true };
+  }
+  // 'valid' or 'unknown' (CF blocked) — keep the key
+  return { hasKey: true, preview: key.substring(0, 10) + '...' };
+});
+
+ipcMain.handle('set-perchance-key', (event, key) => {
+  store.set('perchanceUserKey', key);
+  console.log(`[Main] Perchance key set manually: ${key.substring(0, 10)}...`);
+  return { success: true };
+});
+
+// IPC Handlers — Perchance settings
+ipcMain.handle('get-perchance-art-styles', () => {
+  return perchanceProvider.getArtStyles();
+});
+
+ipcMain.handle('get-perchance-settings', () => {
+  return {
+    artStyle: store.get('perchanceArtStyle') || 'no-style',
+    guidanceScale: store.get('perchanceGuidanceScale') || 7,
+  };
+});
+
+ipcMain.handle('set-perchance-settings', (event, settings) => {
+  if (settings.artStyle !== undefined) store.set('perchanceArtStyle', settings.artStyle);
+  if (settings.guidanceScale !== undefined) store.set('perchanceGuidanceScale', settings.guidanceScale);
+  return { success: true };
+});
+
+// IPC Handlers — NovelAI art styles
+ipcMain.handle('get-novelai-art-styles', () => {
+  return novelaiProvider.getArtStyles();
+});
+
+ipcMain.handle('get-novelai-art-style', () => {
+  return store.get('novelaiArtStyle') || 'no-style';
+});
+
+ipcMain.handle('set-novelai-art-style', (event, styleId) => {
+  store.set('novelaiArtStyle', styleId);
+  return { success: true };
+});
+
+// IPC Handlers — API token (unchanged)
 ipcMain.handle('get-api-token', () => {
   return store.get('apiToken') ? '***configured***' : '';
 });
@@ -264,6 +290,7 @@ ipcMain.handle('set-api-token', (event, token) => {
   return { success: true };
 });
 
+// IPC Handlers — Image settings (unchanged)
 ipcMain.handle('get-image-settings', () => {
   return store.get('imageSettings');
 });
@@ -273,15 +300,21 @@ ipcMain.handle('set-image-settings', (event, settings) => {
   return { success: true };
 });
 
-ipcMain.handle('get-models', () => {
-  return Object.entries(MODEL_CONFIG).map(([id, config]) => ({
-    id,
-    name: config.name,
-    isV4: config.isV4
-  }));
-});
+// IPC Handlers — Storyboard
+ipcMain.handle('storyboard:list', () => storyboard.list());
+ipcMain.handle('storyboard:create', (event, name) => storyboard.create(name));
+ipcMain.handle('storyboard:delete', (event, id) => storyboard.delete(id));
+ipcMain.handle('storyboard:rename', (event, { id, name }) => storyboard.rename(id, name));
+ipcMain.handle('storyboard:set-active', (event, id) => storyboard.setActive(id));
+ipcMain.handle('storyboard:get-scenes', (event, id) => storyboard.getScenes(id));
+ipcMain.handle('storyboard:commit-scene', (event, { storyboardId, sceneData }) => storyboard.commitScene(storyboardId, sceneData));
+ipcMain.handle('storyboard:delete-scene', (event, { storyboardId, sceneId }) => storyboard.deleteScene(storyboardId, sceneId));
+ipcMain.handle('storyboard:reorder-scenes', (event, { storyboardId, sceneIds }) => storyboard.reorderScenes(storyboardId, sceneIds));
+ipcMain.handle('storyboard:update-scene-note', (event, { storyboardId, sceneId, note }) => storyboard.updateSceneNote(storyboardId, sceneId, note));
+ipcMain.handle('storyboard:get-scene-image', (event, { storyboardId, sceneId }) => storyboard.getSceneImage(storyboardId, sceneId));
 
 app.whenReady().then(() => {
+  setupTokenInterception();
   createWindow();
 
   app.on('activate', () => {

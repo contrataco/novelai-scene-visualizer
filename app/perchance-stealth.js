@@ -1,0 +1,129 @@
+// Stealth patches to make Electron look like regular Chrome.
+// Used as a preload with contextIsolation:false so patches apply to page context.
+
+// Hide webdriver flag (primary automation detection signal)
+Object.defineProperty(navigator, 'webdriver', {
+  get: () => undefined,
+  configurable: true,
+});
+
+// Add window.chrome object (missing in Electron, present in real Chrome)
+if (!window.chrome) {
+  window.chrome = {
+    runtime: {
+      connect: function() {},
+      sendMessage: function() {},
+      onMessage: { addListener: function() {}, removeListener: function() {} },
+      onConnect: { addListener: function() {}, removeListener: function() {} },
+    },
+    loadTimes: function() { return {}; },
+    csi: function() { return {}; },
+    app: { isInstalled: false, getDetails: function() {}, getIsInstalled: function() {}, installState: function() {} },
+  };
+}
+
+// NavigatorUAData API (Chrome 90+, missing in Electron)
+if (!navigator.userAgentData) {
+  Object.defineProperty(navigator, 'userAgentData', {
+    get: () => ({
+      brands: [
+        { brand: 'Google Chrome', version: '131' },
+        { brand: 'Chromium', version: '131' },
+        { brand: 'Not_A Brand', version: '24' },
+      ],
+      mobile: false,
+      platform: 'macOS',
+      getHighEntropyValues: function(hints) {
+        return Promise.resolve({
+          brands: this.brands,
+          mobile: false,
+          platform: 'macOS',
+          platformVersion: '15.0.0',
+          architecture: 'arm',
+          bitness: '64',
+          model: '',
+          uaFullVersion: '131.0.0.0',
+          fullVersionList: this.brands,
+        });
+      },
+      toJSON: function() {
+        return { brands: this.brands, mobile: false, platform: 'macOS' };
+      },
+    }),
+    configurable: true,
+  });
+}
+
+// Make navigator.plugins non-empty (Electron has empty plugins array)
+Object.defineProperty(navigator, 'plugins', {
+  get: () => {
+    const arr = [
+      { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 },
+      { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1 },
+      { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 1 },
+    ];
+    arr.item = (i) => arr[i] || null;
+    arr.namedItem = (n) => arr.find(p => p.name === n) || null;
+    arr.refresh = () => {};
+    return arr;
+  },
+  configurable: true,
+});
+
+// Make navigator.mimeTypes non-empty
+Object.defineProperty(navigator, 'mimeTypes', {
+  get: () => {
+    const arr = [
+      { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: { name: 'Chrome PDF Plugin' } },
+    ];
+    arr.item = (i) => arr[i] || null;
+    arr.namedItem = (n) => arr.find(m => m.type === n) || null;
+    return arr;
+  },
+  configurable: true,
+});
+
+// Realistic languages
+Object.defineProperty(navigator, 'languages', {
+  get: () => ['en-US', 'en'],
+  configurable: true,
+});
+
+// Override permissions query to avoid "notification denied" fingerprint
+const originalQuery = window.navigator.permissions?.query?.bind(navigator.permissions);
+if (originalQuery) {
+  navigator.permissions.query = (params) => {
+    if (params.name === 'notifications') {
+      return Promise.resolve({ state: 'prompt', onchange: null });
+    }
+    return originalQuery(params);
+  };
+}
+
+// Patch toString on patched functions to return native code string
+const origToString = Function.prototype.toString;
+const patchedFns = new Set();
+function patchToString(fn) {
+  patchedFns.add(fn);
+}
+
+Function.prototype.toString = function() {
+  if (patchedFns.has(this)) {
+    return 'function ' + (this.name || '') + '() { [native code] }';
+  }
+  return origToString.call(this);
+};
+
+// Patch key functions
+if (window.chrome) {
+  patchToString(window.chrome.runtime.connect);
+  patchToString(window.chrome.runtime.sendMessage);
+}
+
+// Remove Electron/Node.js traces from window
+delete window.process;
+delete window.require;
+delete window.module;
+delete window.exports;
+delete window.Buffer;
+delete window.global;

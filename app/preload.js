@@ -13,78 +13,58 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   setImageSettings: (settings) => ipcRenderer.invoke('set-image-settings', settings),
   getModels: () => ipcRenderer.invoke('get-models'),
 
-  // Event listeners for receiving images
+  // Provider management
+  getProvider: () => ipcRenderer.invoke('get-provider'),
+  setProvider: (providerId) => ipcRenderer.invoke('set-provider', providerId),
+  getProviders: () => ipcRenderer.invoke('get-providers'),
+
+  // NovelAI art styles
+  getNovelaiArtStyles: () => ipcRenderer.invoke('get-novelai-art-styles'),
+  getNovelaiArtStyle: () => ipcRenderer.invoke('get-novelai-art-style'),
+  setNovelaiArtStyle: (styleId) => ipcRenderer.invoke('set-novelai-art-style', styleId),
+
+  // Perchance
+  extractPerchanceKey: () => ipcRenderer.invoke('extract-perchance-key'),
+  setPerchanceKey: (key) => ipcRenderer.invoke('set-perchance-key', key),
+  getPerchanceKeyStatus: () => ipcRenderer.invoke('get-perchance-key-status'),
+  getPerchanceArtStyles: () => ipcRenderer.invoke('get-perchance-art-styles'),
+  getPerchanceSettings: () => ipcRenderer.invoke('get-perchance-settings'),
+  setPerchanceSettings: (settings) => ipcRenderer.invoke('set-perchance-settings', settings),
+
+  // Token status
+  getTokenStatus: () => ipcRenderer.invoke('get-token-status'),
+
+  // Cache management
+  clearWebviewCache: () => ipcRenderer.invoke('clear-webview-cache'),
+
+  // NovelAI credentials
+  getNovelaiCredentials: () => ipcRenderer.invoke('get-novelai-credentials'),
+  setNovelaiCredentials: (creds) => ipcRenderer.invoke('set-novelai-credentials', creds),
+
+  // Storyboard
+  storyboardList: () => ipcRenderer.invoke('storyboard:list'),
+  storyboardCreate: (name) => ipcRenderer.invoke('storyboard:create', name),
+  storyboardDelete: (id) => ipcRenderer.invoke('storyboard:delete', id),
+  storyboardRename: (id, name) => ipcRenderer.invoke('storyboard:rename', { id, name }),
+  storyboardSetActive: (id) => ipcRenderer.invoke('storyboard:set-active', id),
+  storyboardGetScenes: (id) => ipcRenderer.invoke('storyboard:get-scenes', id),
+  storyboardCommitScene: (storyboardId, sceneData) => ipcRenderer.invoke('storyboard:commit-scene', { storyboardId, sceneData }),
+  storyboardDeleteScene: (storyboardId, sceneId) => ipcRenderer.invoke('storyboard:delete-scene', { storyboardId, sceneId }),
+  storyboardReorderScenes: (storyboardId, sceneIds) => ipcRenderer.invoke('storyboard:reorder-scenes', { storyboardId, sceneIds }),
+  storyboardUpdateSceneNote: (storyboardId, sceneId, note) => ipcRenderer.invoke('storyboard:update-scene-note', { storyboardId, sceneId, note }),
+  storyboardGetSceneImage: (storyboardId, sceneId) => ipcRenderer.invoke('storyboard:get-scene-image', { storyboardId, sceneId }),
+
+  // Event listeners
+  onPromptUpdate: (callback) => {
+    ipcRenderer.on('prompt-update', (event, data) => callback(data));
+  },
+  onTokenStatusChanged: (callback) => {
+    ipcRenderer.on('token-status-changed', (event, data) => callback(data));
+  },
   onImageReady: (callback) => {
     ipcRenderer.on('image-ready', (event, data) => callback(data));
-  }
-});
-
-// DOM Observer for NovelAI script communication
-// This runs after the page loads and watches for prompt data from the NovelAI script
-window.addEventListener('DOMContentLoaded', () => {
-  console.log('[Preload] DOM Content Loaded');
-
-  // Create a hidden element for communication with NovelAI script
-  const bridge = document.createElement('div');
-  bridge.id = 'scene-visualizer-bridge';
-  bridge.style.display = 'none';
-  bridge.dataset.prompt = '';
-  bridge.dataset.status = 'ready';
-  bridge.dataset.image = '';
-  document.body.appendChild(bridge);
-
-  // Watch for prompt changes from NovelAI script
-  const observer = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      if (mutation.type === 'attributes' && mutation.attributeName === 'data-prompt') {
-        const prompt = bridge.dataset.prompt;
-        if (prompt && bridge.dataset.status === 'pending') {
-          console.log('[Preload] Detected new prompt:', prompt.substring(0, 50) + '...');
-          handlePromptRequest(prompt);
-        }
-      }
-    }
-  });
-
-  observer.observe(bridge, {
-    attributes: true,
-    attributeFilter: ['data-prompt']
-  });
-
-  async function handlePromptRequest(prompt) {
-    bridge.dataset.status = 'generating';
-
-    try {
-      // Parse prompt if it's JSON (may include negative prompt)
-      let positivePrompt = prompt;
-      let negativePrompt = '';
-
-      try {
-        const parsed = JSON.parse(prompt);
-        positivePrompt = parsed.prompt || prompt;
-        negativePrompt = parsed.negativePrompt || '';
-      } catch (e) {
-        // Not JSON, use as-is
-      }
-
-      const result = await ipcRenderer.invoke('generate-image', {
-        prompt: positivePrompt,
-        negativePrompt
-      });
-
-      if (result.success) {
-        bridge.dataset.image = result.imageData;
-        bridge.dataset.status = 'ready';
-        console.log('[Preload] Image ready, injected into bridge');
-      } else {
-        bridge.dataset.error = result.error;
-        bridge.dataset.status = 'error';
-        console.error('[Preload] Image generation failed:', result.error);
-      }
-    } catch (error) {
-      bridge.dataset.error = error.message;
-      bridge.dataset.status = 'error';
-      console.error('[Preload] Error:', error);
-    }
-  }
+  },
+  onSuggestionsUpdate: (callback) => {
+    ipcRenderer.on('suggestions-update', (event, data) => callback(data));
+  },
 });

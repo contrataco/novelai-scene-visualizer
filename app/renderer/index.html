@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://*.novelai.net; script-src 'self' 'unsafe-inline' https://*.novelai.net; style-src 'self' 'unsafe-inline' https://*.novelai.net; img-src 'self' data: https://*.novelai.net blob:; connect-src 'self' https://*.novelai.net wss://*.novelai.net;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://*.novelai.net; script-src 'self' 'unsafe-inline' https://*.novelai.net; style-src 'self' 'unsafe-inline' https://*.novelai.net; img-src 'self' data: https://*.novelai.net https://*.perchance.org blob:; connect-src 'self' https://*.novelai.net wss://*.novelai.net https://*.perchance.org;">
   <title>NovelAI Scene Visualizer</title>
   <style>
     * {
@@ -171,6 +171,129 @@
       font-size: 11px;
       color: #888;
       margin-bottom: 8px;
+    }
+
+    /* Story Suggestions */
+    .suggestions-section {
+      border-top: 1px solid #0f3460;
+      padding-top: 12px;
+      margin-top: 12px;
+    }
+
+    .suggestions-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      margin-bottom: 8px;
+    }
+
+    .suggestions-header h3 {
+      font-size: 13px;
+      color: #e94560;
+      margin: 0;
+    }
+
+    .suggestions-header .toggle-arrow {
+      font-size: 12px;
+      color: #888;
+      transition: transform 0.2s;
+    }
+
+    .suggestions-header .toggle-arrow.collapsed {
+      transform: rotate(-90deg);
+    }
+
+    .suggestions-body.collapsed {
+      display: none;
+    }
+
+    .suggestion-card {
+      background: #1a1a2e;
+      border: 1px solid #0f3460;
+      border-left: 3px solid #a0a0a0;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .suggestion-card:hover {
+      background: #1e2a4a;
+      border-color: #e94560;
+    }
+
+    .suggestion-card.type-action { border-left-color: #6bcb77; }
+    .suggestion-card.type-dialogue { border-left-color: #4d96ff; }
+    .suggestion-card.type-narrative { border-left-color: #ffd93d; }
+    .suggestion-card.type-mixed { border-left-color: #a0a0a0; }
+
+    .suggestion-type {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+
+    .suggestion-card.type-action .suggestion-type { color: #6bcb77; }
+    .suggestion-card.type-dialogue .suggestion-type { color: #4d96ff; }
+    .suggestion-card.type-narrative .suggestion-type { color: #ffd93d; }
+    .suggestion-card.type-mixed .suggestion-type { color: #a0a0a0; }
+
+    .suggestion-text {
+      font-size: 12px;
+      line-height: 1.4;
+      color: #ccc;
+    }
+
+    .suggestions-empty {
+      text-align: center;
+      padding: 16px;
+      color: #666;
+      font-size: 12px;
+    }
+
+    .suggestions-error {
+      background: #2a1a1a;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 8px;
+    }
+
+    .suggestions-error .error-title {
+      color: #ff6b6b;
+      font-weight: bold;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+
+    .suggestions-error .error-detail {
+      color: #ff8888;
+      font-size: 11px;
+    }
+
+    .suggestion-status {
+      font-size: 11px;
+      text-align: center;
+      padding: 6px;
+      border-radius: 4px;
+      margin-top: 8px;
+      display: none;
+    }
+
+    .suggestion-status.success {
+      display: block;
+      background: #1a2e1a;
+      color: #4ade80;
+    }
+
+    .suggestion-status.error {
+      display: block;
+      background: #2e1a1a;
+      color: #ef4444;
     }
 
     /* Loading spinner */
@@ -349,6 +472,46 @@
       pointer-events: none;
     }
 
+    .settings-section[data-provider] {
+      display: none;
+    }
+
+    .settings-section[data-provider].provider-visible {
+      display: block;
+    }
+
+    .key-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+
+    .key-status .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .key-status .dot.active { background: #4ade80; }
+    .key-status .dot.inactive { background: #ef4444; }
+
+    .key-extract-btn {
+      background: #0f3460;
+      border: none;
+      color: #eee;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: background 0.2s;
+    }
+
+    .key-extract-btn:hover { background: #e94560; }
+    .key-extract-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
     .modal-buttons {
       display: flex;
       gap: 8px;
@@ -372,6 +535,274 @@
       background: #0f3460;
       color: #eee;
     }
+
+    /* Commit Button */
+    .commit-btn {
+      width: 100%;
+      margin-top: 6px;
+      padding: 6px 0;
+      background: #1a6b3a;
+      border: 1px solid #2a8b4a;
+      color: #aaa;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .commit-btn:hover:not(:disabled) {
+      background: #2a8b4a;
+      color: #fff;
+    }
+
+    .commit-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .commit-confirm {
+      background: #1a2e1a;
+      border: 1px solid #2a8b4a;
+      border-radius: 6px;
+      padding: 10px;
+      margin-top: 6px;
+      display: none;
+    }
+
+    .commit-confirm.active {
+      display: block;
+    }
+
+    .commit-confirm label {
+      font-size: 11px;
+      color: #888;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .commit-confirm input[type="text"] {
+      width: 100%;
+      padding: 4px 8px;
+      border: 1px solid #0f3460;
+      border-radius: 4px;
+      background: #1a1a2e;
+      color: #eee;
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .commit-confirm .commit-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .commit-confirm .commit-actions button {
+      flex: 1;
+      padding: 4px 8px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+
+    .commit-confirm .btn-confirm {
+      background: #2a8b4a;
+      color: #fff;
+    }
+
+    .commit-confirm .btn-cancel {
+      background: #0f3460;
+      color: #eee;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #2a8b4a;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 6px;
+      font-size: 13px;
+      z-index: 2000;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+
+    .toast.show {
+      opacity: 1;
+    }
+
+    /* Storyboard Viewer Modal */
+    .storyboard-modal .modal-content {
+      width: 850px;
+      max-width: 95%;
+    }
+
+    .storyboard-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .storyboard-header select {
+      flex: 1;
+      padding: 6px 10px;
+      border: 1px solid #0f3460;
+      border-radius: 4px;
+      background: #1a1a2e;
+      color: #eee;
+      font-size: 14px;
+    }
+
+    .storyboard-header button {
+      padding: 6px 12px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #eee;
+    }
+
+    .storyboard-header .sb-new-btn {
+      background: #2a8b4a;
+    }
+
+    .storyboard-header .sb-del-btn {
+      background: #8b2a2a;
+    }
+
+    .storyboard-header .sb-rename-btn {
+      background: #0f3460;
+    }
+
+    .scene-list {
+      max-height: 60vh;
+      overflow-y: auto;
+    }
+
+    .scene-card {
+      display: flex;
+      gap: 12px;
+      background: #1a1a2e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+
+    .scene-thumb {
+      width: 120px;
+      min-width: 120px;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #0f3460;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      aspect-ratio: 2/3;
+    }
+
+    .scene-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .scene-thumb .thumb-placeholder {
+      color: #555;
+      font-size: 11px;
+    }
+
+    .scene-meta {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .scene-meta .scene-number {
+      font-size: 11px;
+      color: #e94560;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .scene-meta .scene-timestamp {
+      font-size: 10px;
+      color: #666;
+      margin-bottom: 6px;
+    }
+
+    .scene-meta .scene-prompt {
+      font-size: 11px;
+      color: #aaa;
+      line-height: 1.3;
+      max-height: 40px;
+      overflow: hidden;
+      margin-bottom: 4px;
+    }
+
+    .scene-meta .scene-excerpt {
+      font-size: 10px;
+      color: #666;
+      font-style: italic;
+      max-height: 30px;
+      overflow: hidden;
+      margin-bottom: 4px;
+    }
+
+    .scene-meta .scene-chars {
+      font-size: 10px;
+      color: #4d96ff;
+      margin-bottom: 4px;
+    }
+
+    .scene-meta .scene-note {
+      font-size: 11px;
+      color: #ffd93d;
+      margin-bottom: 6px;
+    }
+
+    .scene-meta .scene-info {
+      font-size: 10px;
+      color: #555;
+      margin-bottom: 6px;
+    }
+
+    .scene-actions {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .scene-actions button {
+      padding: 3px 8px;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 10px;
+      background: #0f3460;
+      color: #aaa;
+      transition: background 0.2s;
+    }
+
+    .scene-actions button:hover {
+      background: #e94560;
+      color: #fff;
+    }
+
+    .scene-actions button.danger:hover {
+      background: #8b2a2a;
+    }
+
+    .scene-empty {
+      text-align: center;
+      padding: 40px;
+      color: #555;
+    }
   </style>
 </head>
 <body>
@@ -379,8 +810,14 @@
     <h1>Scene Visualizer</h1>
     <button id="generateBtn" class="primary">Generate Scene</button>
     <button id="togglePanelBtn">Toggle Panel</button>
+    <button id="storyboardBtn">Storyboard</button>
     <button id="settingsBtn">Settings</button>
     <button id="reloadBtn">Reload</button>
+    <button id="hardReloadBtn" title="Clear cache and reload">Hard Reload</button>
+    <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#aaa;cursor:pointer;user-select:none;">
+      <input type="checkbox" id="autoGenerateToggle" style="cursor:pointer;">
+      Auto-generate
+    </label>
     <span class="status" id="status">Initializing...</span>
   </div>
 
@@ -413,6 +850,49 @@
         <div class="prompt-display" id="promptDisplay">
           No prompt yet. The NovelAI script will generate prompts as you write.
         </div>
+        <button id="sidebarGenerateBtn" style="
+          width: 100%;
+          margin-top: 8px;
+          padding: 6px 0;
+          background: #0f3460;
+          border: 1px solid #1a4a7a;
+          color: #aaa;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 11px;
+          transition: background 0.2s, color 0.2s;
+        " onmouseover="this.style.background='#e94560';this.style.color='#fff'" onmouseout="this.style.background='#0f3460';this.style.color='#aaa'">Generate Image</button>
+
+        <button id="commitBtn" class="commit-btn" disabled>Commit to Storyboard</button>
+        <div id="commitConfirm" class="commit-confirm">
+          <label>Storyboard: <span id="commitSbName">Default</span></label>
+          <label>Note (optional):</label>
+          <input type="text" id="commitNoteInput" placeholder="Scene annotation...">
+          <div class="commit-actions">
+            <button class="btn-confirm" id="commitConfirmBtn">Confirm</button>
+            <button class="btn-cancel" id="commitCancelBtn">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Story Suggestions -->
+        <div class="suggestions-section">
+          <div class="suggestions-header" id="suggestionsToggle">
+            <h3>Story Suggestions</h3>
+            <span class="toggle-arrow" id="suggestionsArrow">&#9660;</span>
+          </div>
+          <div class="suggestions-body" id="suggestionsBody">
+            <div id="suggestionsContainer">
+              <div class="suggestions-empty">
+                Suggestions will appear after the AI responds.
+              </div>
+            </div>
+            <div id="suggestionsLoading" class="loading" style="display: none;">
+              <div class="spinner"></div>
+              <span>Generating suggestions...</span>
+            </div>
+            <div id="suggestionStatus" class="suggestion-status"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -422,17 +902,84 @@
     <div class="modal-content">
       <h2>Settings</h2>
 
-      <!-- API Token Section -->
+      <!-- Provider Selection -->
       <div class="settings-section">
-        <h3>Authentication</h3>
+        <h3>Provider</h3>
         <div class="form-group">
-          <label>NovelAI API Token</label>
+          <label>Image Generation Provider</label>
+          <select id="provider">
+            <option value="novelai">NovelAI (requires API token)</option>
+            <option value="perchance">Perchance (free, lower resolution)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- API Token Section (NovelAI only) -->
+      <div class="settings-section" data-provider="novelai">
+        <h3>Authentication</h3>
+        <div class="key-status" id="novelaiTokenStatus">
+          <span class="dot inactive" id="novelaiTokenDot"></span>
+          <span id="novelaiTokenText">Checking...</span>
+        </div>
+        <div style="font-size:11px;color:#666;margin-bottom:12px;">
+          Just log in to NovelAI in the main panel. The token will be captured automatically.
+        </div>
+        <div class="form-group">
+          <label>Auto-Login Email</label>
+          <input type="email" id="novelaiEmail" placeholder="Email (or set NOVELAI_EMAIL in .env)">
+        </div>
+        <div class="form-group">
+          <label>Auto-Login Password</label>
+          <input type="password" id="novelaiPassword" placeholder="Password (or set NOVELAI_PASSWORD in .env)">
+        </div>
+        <div style="font-size:11px;color:#666;margin-bottom:12px;">
+          Credentials auto-fill the login form when needed. You can also set them in <code>app/.env</code> instead.
+        </div>
+        <div class="form-group">
+          <label>Or enter API token manually</label>
           <input type="password" id="apiToken" placeholder="Enter your persistent API token">
         </div>
       </div>
 
-      <!-- Model Selection -->
-      <div class="settings-section">
+      <!-- Perchance Key Section -->
+      <div class="settings-section" data-provider="perchance">
+        <h3>Perchance Key</h3>
+        <div class="key-status">
+          <span class="dot inactive" id="perchanceKeyDot"></span>
+          <span id="perchanceKeyText">No key extracted</span>
+        </div>
+        <button class="key-extract-btn" id="extractKeyBtn">Extract Key (Auto)</button>
+        <div class="form-group" style="margin-top: 12px;">
+          <label>Or paste key manually (from browser DevTools → Network tab → userKey param)</label>
+          <div style="display:flex;gap:8px;">
+            <input type="text" id="perchanceManualKey" placeholder="64-character hex key" style="flex:1;font-family:monospace;font-size:12px;">
+            <button class="key-extract-btn" id="saveManualKeyBtn">Save</button>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top: 8px;">
+          <label>Art Style</label>
+          <select id="perchanceArtStyle"></select>
+        </div>
+        <div class="form-group">
+          <label>Guidance Scale</label>
+          <div class="slider-group">
+            <input type="range" id="perchanceGuidance" min="1" max="20" step="0.5" value="7">
+            <span class="slider-value" id="perchanceGuidanceValue">7</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Art Style (NovelAI only) -->
+      <div class="settings-section" data-provider="novelai">
+        <h3>Art Style</h3>
+        <div class="form-group">
+          <label>Style Preset (appended to prompts)</label>
+          <select id="novelaiArtStyle"></select>
+        </div>
+      </div>
+
+      <!-- Model Selection (NovelAI only) -->
+      <div class="settings-section" data-provider="novelai">
         <h3>Model</h3>
         <div class="form-group">
           <label>Image Model</label>
@@ -474,8 +1021,8 @@
         </div>
       </div>
 
-      <!-- Generation Parameters -->
-      <div class="settings-section">
+      <!-- Generation Parameters (NovelAI only) -->
+      <div class="settings-section" data-provider="novelai">
         <h3>Generation</h3>
         <div class="form-row">
           <div class="form-group">
@@ -518,8 +1065,8 @@
         </div>
       </div>
 
-      <!-- V3-Only Options -->
-      <div class="settings-section v3-only" id="v3Options">
+      <!-- V3-Only Options (NovelAI only) -->
+      <div class="settings-section v3-only" id="v3Options" data-provider="novelai">
         <h3>V3 Options (SMEA)</h3>
         <div class="form-row">
           <div class="form-group checkbox">
@@ -533,8 +1080,8 @@
         </div>
       </div>
 
-      <!-- Quality Options -->
-      <div class="settings-section">
+      <!-- Quality Options (NovelAI only) -->
+      <div class="settings-section" data-provider="novelai">
         <h3>Quality</h3>
         <div class="form-group">
           <label>UC Preset (Negative Prompt Base)</label>
@@ -556,6 +1103,28 @@
     </div>
   </div>
 
+  <!-- Storyboard Viewer Modal -->
+  <div class="modal storyboard-modal" id="storyboardModal">
+    <div class="modal-content">
+      <h2>Storyboard</h2>
+      <div class="storyboard-header">
+        <select id="storyboardSelect"></select>
+        <button class="sb-rename-btn" id="sbRenameBtn">Rename</button>
+        <button class="sb-new-btn" id="sbNewBtn">New</button>
+        <button class="sb-del-btn" id="sbDeleteBtn">Delete</button>
+      </div>
+      <div class="scene-list" id="sceneList">
+        <div class="scene-empty">No scenes yet. Generate an image and commit it to start your storyboard.</div>
+      </div>
+      <div class="modal-buttons" style="margin-top: 12px;">
+        <button class="cancel" id="storyboardCloseBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
   <script>
     const webview = document.getElementById('novelai');
     const status = document.getElementById('status');
@@ -567,6 +1136,7 @@
 
     // Buttons
     const generateBtn = document.getElementById('generateBtn');
+    const sidebarGenerateBtn = document.getElementById('sidebarGenerateBtn');
     const togglePanelBtn = document.getElementById('togglePanelBtn');
     const settingsBtn = document.getElementById('settingsBtn');
     const reloadBtn = document.getElementById('reloadBtn');
@@ -574,7 +1144,10 @@
     const cancelBtn = document.getElementById('cancelBtn');
     const saveBtn = document.getElementById('saveBtn');
 
-    // Settings elements
+    // Settings elements — Provider
+    const providerSelect = document.getElementById('provider');
+
+    // Settings elements — NovelAI
     const modelSelect = document.getElementById('model');
     const resolutionPreset = document.getElementById('resolutionPreset');
     const imgWidth = document.getElementById('imgWidth');
@@ -591,8 +1164,55 @@
     const qualityTagsCheckbox = document.getElementById('qualityTags');
     const v3Options = document.getElementById('v3Options');
 
+    // Settings elements — NovelAI art style
+    const novelaiArtStyleSelect = document.getElementById('novelaiArtStyle');
+
+    // Settings elements — Perchance
+    const extractKeyBtn = document.getElementById('extractKeyBtn');
+    const perchanceKeyDot = document.getElementById('perchanceKeyDot');
+    const perchanceKeyText = document.getElementById('perchanceKeyText');
+    const perchanceArtStyleSelect = document.getElementById('perchanceArtStyle');
+    const perchanceGuidanceSlider = document.getElementById('perchanceGuidance');
+    const perchanceGuidanceValue = document.getElementById('perchanceGuidanceValue');
+
+    // Auto-generate toggle
+    const autoGenerateToggle = document.getElementById('autoGenerateToggle');
+
+    // NovelAI token status elements
+    const novelaiTokenDot = document.getElementById('novelaiTokenDot');
+    const novelaiTokenText = document.getElementById('novelaiTokenText');
+
+    // NovelAI credential elements
+    const novelaiEmailInput = document.getElementById('novelaiEmail');
+    const novelaiPasswordInput = document.getElementById('novelaiPassword');
+
     let currentPrompt = '';
+    let currentNegativePrompt = '';
+    let currentStoryExcerpt = '';
     let isGenerating = false;
+
+    // Storyboard state
+    let currentImageData = null;       // base64 of last generated image
+    let currentGenerationMeta = null;  // { provider, model, resolution }
+    let activeStoryboardId = null;
+    let activeStoryboardName = '';
+
+    // Storyboard elements
+    const storyboardBtn = document.getElementById('storyboardBtn');
+    const storyboardModal = document.getElementById('storyboardModal');
+    const storyboardSelect = document.getElementById('storyboardSelect');
+    const sceneList = document.getElementById('sceneList');
+    const storyboardCloseBtn = document.getElementById('storyboardCloseBtn');
+    const sbNewBtn = document.getElementById('sbNewBtn');
+    const sbDeleteBtn = document.getElementById('sbDeleteBtn');
+    const sbRenameBtn = document.getElementById('sbRenameBtn');
+    const commitBtn = document.getElementById('commitBtn');
+    const commitConfirm = document.getElementById('commitConfirm');
+    const commitSbName = document.getElementById('commitSbName');
+    const commitNoteInput = document.getElementById('commitNoteInput');
+    const commitConfirmBtn = document.getElementById('commitConfirmBtn');
+    const commitCancelBtn = document.getElementById('commitCancelBtn');
+    const toastEl = document.getElementById('toast');
 
     // Resolution presets
     const RESOLUTION_PRESETS = {
@@ -621,6 +1241,107 @@
         smeaDynCheckbox.checked = false;
       }
     }
+
+    // Show/hide settings sections based on selected provider
+    function updateProviderSections() {
+      const selected = providerSelect.value;
+      document.querySelectorAll('.settings-section[data-provider]').forEach(section => {
+        const match = section.dataset.provider === selected;
+        section.classList.toggle('provider-visible', match);
+      });
+      // Clamp resolution max for Perchance
+      const maxDim = selected === 'perchance' ? 768 : 1536;
+      imgWidth.max = maxDim;
+      imgHeight.max = maxDim;
+      if (selected === 'perchance') {
+        if (parseInt(imgWidth.value) > maxDim) imgWidth.value = maxDim;
+        if (parseInt(imgHeight.value) > maxDim) imgHeight.value = maxDim;
+      }
+    }
+
+    providerSelect.addEventListener('change', updateProviderSections);
+
+    // Perchance guidance scale slider
+    perchanceGuidanceSlider.addEventListener('input', () => {
+      perchanceGuidanceValue.textContent = perchanceGuidanceSlider.value;
+    });
+
+    // Perchance key extraction
+    extractKeyBtn.addEventListener('click', async () => {
+      extractKeyBtn.disabled = true;
+      extractKeyBtn.textContent = 'Extracting...';
+      perchanceKeyText.textContent = 'Extracting key (a browser window may appear)...';
+      try {
+        const result = await window.sceneVisualizer.extractPerchanceKey();
+        if (result.success) {
+          perchanceKeyDot.className = 'dot active';
+          perchanceKeyText.textContent = 'Key extracted successfully';
+        } else {
+          perchanceKeyDot.className = 'dot inactive';
+          perchanceKeyText.textContent = result.error || 'Extraction failed or timed out';
+        }
+      } catch (e) {
+        perchanceKeyDot.className = 'dot inactive';
+        perchanceKeyText.textContent = 'Error: ' + e.message;
+      } finally {
+        extractKeyBtn.disabled = false;
+        extractKeyBtn.textContent = 'Extract Key';
+      }
+    });
+
+    // Manual key entry
+    const saveManualKeyBtn = document.getElementById('saveManualKeyBtn');
+    const perchanceManualKeyInput = document.getElementById('perchanceManualKey');
+    saveManualKeyBtn.addEventListener('click', async () => {
+      const key = perchanceManualKeyInput.value.trim();
+      if (!/^[a-f0-9]{64}$/i.test(key)) {
+        perchanceKeyDot.className = 'dot inactive';
+        perchanceKeyText.textContent = 'Invalid key — must be 64 hex characters';
+        return;
+      }
+      try {
+        const result = await window.sceneVisualizer.setPerchanceKey(key);
+        if (result.success) {
+          perchanceKeyDot.className = 'dot active';
+          perchanceKeyText.textContent = 'Key saved: ' + key.substring(0, 10) + '...';
+          perchanceManualKeyInput.value = '';
+        }
+      } catch (e) {
+        perchanceKeyText.textContent = 'Error saving key: ' + e.message;
+      }
+    });
+
+    // Populate NovelAI art styles on load
+    (async function loadNovelaiArtStyles() {
+      try {
+        const styles = await window.sceneVisualizer.getNovelaiArtStyles();
+        novelaiArtStyleSelect.innerHTML = '';
+        for (const style of styles) {
+          const opt = document.createElement('option');
+          opt.value = style.id;
+          opt.textContent = style.name;
+          novelaiArtStyleSelect.appendChild(opt);
+        }
+      } catch (e) {
+        console.error('Failed to load NovelAI art styles:', e);
+      }
+    })();
+
+    // Populate Perchance art styles on load
+    (async function loadArtStyles() {
+      try {
+        const styles = await window.sceneVisualizer.getPerchanceArtStyles();
+        perchanceArtStyleSelect.innerHTML = '';
+        for (const style of styles) {
+          const opt = document.createElement('option');
+          opt.value = style.id;
+          opt.textContent = style.name;
+          perchanceArtStyleSelect.appendChild(opt);
+        }
+      } catch (e) {
+        console.error('Failed to load art styles:', e);
+      }
+    })();
 
     // Handle resolution preset change
     resolutionPreset.addEventListener('change', () => {
@@ -671,6 +1392,20 @@
       console.error('Webview load failed:', e);
     });
 
+    // Listen for suggestion insertion results from webview preload
+    webview.addEventListener('ipc-message', (event) => {
+      if (event.channel === 'suggestion-inserted') {
+        const result = event.args[0];
+        if (result && result.success) {
+          console.log('[Renderer] Suggestion inserted via', result.method);
+          showSuggestionStatus('Suggestion inserted into editor', 'success');
+        } else {
+          console.warn('[Renderer] Suggestion insertion failed:', result?.error);
+          showSuggestionStatus(result?.error || 'Could not insert suggestion', 'error');
+        }
+      }
+    });
+
     // Generate Scene button
     generateBtn.addEventListener('click', async () => {
       if (isGenerating) return;
@@ -711,7 +1446,13 @@
       }
     });
 
-    async function generateImage(prompt) {
+    // Sidebar generate button — uses current prompt directly
+    sidebarGenerateBtn.addEventListener('click', () => {
+      if (isGenerating || !currentPrompt) return;
+      generateImage(currentPrompt, currentNegativePrompt);
+    });
+
+    async function generateImage(prompt, negativePrompt) {
       isGenerating = true;
       generateBtn.disabled = true;
       status.textContent = 'Generating...';
@@ -719,10 +1460,13 @@
       loadingIndicator.style.display = 'flex';
 
       try {
-        const result = await window.sceneVisualizer.generateImage(prompt, '');
+        const result = await window.sceneVisualizer.generateImage(prompt, negativePrompt || currentNegativePrompt || '');
 
         if (result.success) {
+          currentImageData = result.imageData;
+          currentGenerationMeta = result.meta || null;
           imageContainer.innerHTML = `<img src="${result.imageData}" class="scene-image" alt="Generated scene">`;
+          commitBtn.disabled = false;
           status.textContent = 'Image ready';
           status.className = 'status connected';
         } else {
@@ -759,8 +1503,57 @@
 
     // Settings
     settingsBtn.addEventListener('click', async () => {
-      const token = await window.sceneVisualizer.getApiToken();
-      const settings = await window.sceneVisualizer.getImageSettings();
+      const [token, settings, currentProvider, keyStatus, perchanceSettings, novelaiArtStyle] = await Promise.all([
+        window.sceneVisualizer.getApiToken(),
+        window.sceneVisualizer.getImageSettings(),
+        window.sceneVisualizer.getProvider(),
+        window.sceneVisualizer.getPerchanceKeyStatus(),
+        window.sceneVisualizer.getPerchanceSettings(),
+        window.sceneVisualizer.getNovelaiArtStyle(),
+      ]);
+
+      // Provider
+      providerSelect.value = currentProvider || 'novelai';
+      updateProviderSections();
+
+      // Perchance key status
+      if (keyStatus.hasKey) {
+        perchanceKeyDot.className = 'dot active';
+        perchanceKeyText.textContent = 'Key active: ' + keyStatus.preview;
+      } else {
+        perchanceKeyDot.className = 'dot inactive';
+        perchanceKeyText.textContent = keyStatus.expired ? 'Key expired — extract a new one' : 'No key extracted';
+      }
+
+      // Perchance settings
+      perchanceArtStyleSelect.value = perchanceSettings.artStyle || 'no-style';
+      perchanceGuidanceSlider.value = perchanceSettings.guidanceScale || 7;
+      perchanceGuidanceValue.textContent = perchanceSettings.guidanceScale || 7;
+
+      // NovelAI art style
+      novelaiArtStyleSelect.value = novelaiArtStyle || 'no-style';
+
+      // NovelAI token status
+      const tokenStatus = await window.sceneVisualizer.getTokenStatus();
+      if (tokenStatus.hasToken) {
+        novelaiTokenDot.className = 'dot active';
+        novelaiTokenText.textContent = 'Token active (auto-captured from login)';
+      } else {
+        novelaiTokenDot.className = 'dot inactive';
+        novelaiTokenText.textContent = 'No token — log in to NovelAI';
+      }
+
+      // NovelAI credentials (show placeholder if .env has them)
+      const creds = await window.sceneVisualizer.getNovelaiCredentials();
+      novelaiEmailInput.value = '';
+      novelaiPasswordInput.value = '';
+      if (creds.hasCredentials) {
+        novelaiEmailInput.placeholder = 'Configured (enter new to replace)';
+        novelaiPasswordInput.placeholder = 'Configured (enter new to replace)';
+      } else {
+        novelaiEmailInput.placeholder = 'Email (or set NOVELAI_EMAIL in .env)';
+        novelaiPasswordInput.placeholder = 'Password (or set NOVELAI_PASSWORD in .env)';
+      }
 
       // API Token
       document.getElementById('apiToken').value = '';
@@ -806,10 +1599,33 @@
     });
 
     saveBtn.addEventListener('click', async () => {
+      // Provider
+      await window.sceneVisualizer.setProvider(providerSelect.value);
+
+      // NovelAI credentials
+      const email = novelaiEmailInput.value.trim();
+      const password = novelaiPasswordInput.value;
+      if (email || password) {
+        await window.sceneVisualizer.setNovelaiCredentials({
+          ...(email && { email }),
+          ...(password && { password }),
+        });
+      }
+
+      // NovelAI token
       const token = document.getElementById('apiToken').value;
       if (token) {
         await window.sceneVisualizer.setApiToken(token);
       }
+
+      // NovelAI art style
+      await window.sceneVisualizer.setNovelaiArtStyle(novelaiArtStyleSelect.value);
+
+      // Perchance settings
+      await window.sceneVisualizer.setPerchanceSettings({
+        artStyle: perchanceArtStyleSelect.value,
+        guidanceScale: parseFloat(perchanceGuidanceSlider.value),
+      });
 
       await window.sceneVisualizer.setImageSettings({
         // Model
@@ -844,14 +1660,492 @@
       webview.reload();
     });
 
+    document.getElementById('hardReloadBtn').addEventListener('click', async () => {
+      status.textContent = 'Clearing cache...';
+      status.className = 'status generating';
+      try {
+        await window.sceneVisualizer.clearWebviewCache();
+        webview.reloadIgnoringCache();
+        status.textContent = 'Cache cleared, reloading...';
+        status.className = 'status connected';
+      } catch (e) {
+        console.error('[Renderer] Hard reload error:', e);
+        webview.reloadIgnoringCache();
+      }
+    });
+
     // Close modal on escape
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         settingsModal.classList.remove('active');
+        storyboardModal.classList.remove('active');
       }
     });
 
-    // Periodically try to read the prompt from NovelAI
+    // Listen for prompt updates from webview bridge (primary path)
+    window.sceneVisualizer.onPromptUpdate((data) => {
+      console.log('[Renderer] Received prompt update from bridge');
+      currentPrompt = data.prompt;
+      currentNegativePrompt = data.negativePrompt || '';
+      currentStoryExcerpt = data.storyExcerpt || '';
+      promptDisplay.textContent = currentPrompt;
+
+      // Show the image panel if hidden
+      imagePanel.classList.remove('hidden');
+
+      // Flash status
+      status.textContent = 'New prompt received';
+      status.className = 'status connected';
+      setTimeout(() => {
+        if (status.textContent === 'New prompt received') {
+          status.textContent = 'Connected';
+        }
+      }, 3000);
+
+      // Auto-generate if toggle is on and not already generating
+      if (data.autoGenerate || autoGenerateToggle.checked) {
+        if (!isGenerating) {
+          generateImage(data.prompt, data.negativePrompt);
+        }
+      }
+    });
+
+    // Listen for token status changes
+    window.sceneVisualizer.onTokenStatusChanged((data) => {
+      console.log('[Renderer] Token status changed:', data);
+      status.textContent = 'Token captured';
+      status.className = 'status connected';
+      setTimeout(() => {
+        if (status.textContent === 'Token captured') {
+          status.textContent = 'Connected';
+        }
+      }, 3000);
+    });
+
+    // ========================================================================
+    // STORY SUGGESTIONS
+    // ========================================================================
+
+    const suggestionsToggle = document.getElementById('suggestionsToggle');
+    const suggestionsArrow = document.getElementById('suggestionsArrow');
+    const suggestionsBody = document.getElementById('suggestionsBody');
+    const suggestionsContainer = document.getElementById('suggestionsContainer');
+    const suggestionsLoading = document.getElementById('suggestionsLoading');
+    const suggestionStatus = document.getElementById('suggestionStatus');
+
+    // Toggle collapse
+    suggestionsToggle.addEventListener('click', () => {
+      suggestionsBody.classList.toggle('collapsed');
+      suggestionsArrow.classList.toggle('collapsed');
+    });
+
+    /**
+     * Render suggestion cards from data
+     */
+    function renderSuggestions(suggestions) {
+      suggestionsContainer.innerHTML = '';
+
+      if (!suggestions || suggestions.length === 0) {
+        suggestionsContainer.innerHTML = '<div class="suggestions-empty">Suggestions will appear after the AI responds.</div>';
+        return;
+      }
+
+      for (const suggestion of suggestions) {
+        const card = document.createElement('div');
+        card.className = 'suggestion-card type-' + (suggestion.type || 'mixed');
+
+        const typeLabel = document.createElement('div');
+        typeLabel.className = 'suggestion-type';
+        const typeNames = { action: 'Action', dialogue: 'Dialogue', narrative: 'Narrative', mixed: 'Mixed' };
+        typeLabel.textContent = typeNames[suggestion.type] || 'Mixed';
+
+        const textEl = document.createElement('div');
+        textEl.className = 'suggestion-text';
+        textEl.textContent = suggestion.text;
+
+        card.appendChild(typeLabel);
+        card.appendChild(textEl);
+
+        card.addEventListener('click', () => {
+          insertSuggestionIntoEditor(suggestion);
+        });
+
+        suggestionsContainer.appendChild(card);
+      }
+    }
+
+    /**
+     * Show a temporary status message in the suggestions section
+     */
+    function showSuggestionStatus(message, type) {
+      suggestionStatus.textContent = message;
+      suggestionStatus.className = 'suggestion-status ' + type;
+      setTimeout(() => {
+        suggestionStatus.className = 'suggestion-status';
+        suggestionStatus.style.display = 'none';
+      }, 3000);
+    }
+
+    /**
+     * Insert suggestion text into NovelAI's ProseMirror editor via webview IPC.
+     * Sends text to webview-preload.js which uses ProseMirror-compatible strategies
+     * (synthetic paste, beforeinput, clipboard paste) instead of execCommand('insertText')
+     * which ProseMirror ignores.
+     */
+    function insertSuggestionIntoEditor(suggestion) {
+      try {
+        webview.send('insert-suggestion', { text: suggestion.text });
+      } catch (e) {
+        console.error('[Renderer] Error sending insert-suggestion IPC:', e);
+        showSuggestionStatus('Error inserting suggestion', 'error');
+      }
+    }
+
+    // Listen for suggestions from webview bridge
+    window.sceneVisualizer.onSuggestionsUpdate((data) => {
+      console.log('[Renderer] Received suggestions update:', data);
+
+      if (data.isLoading) {
+        suggestionsLoading.style.display = 'flex';
+        suggestionsContainer.innerHTML = '';
+        // Auto-expand if collapsed
+        suggestionsBody.classList.remove('collapsed');
+        suggestionsArrow.classList.remove('collapsed');
+        return;
+      }
+
+      suggestionsLoading.style.display = 'none';
+
+      if (data.error) {
+        suggestionsContainer.innerHTML = '';
+        const errDiv = document.createElement('div');
+        errDiv.className = 'suggestions-error';
+        errDiv.innerHTML = '<div class="error-title">Error generating suggestions</div>' +
+          '<div class="error-detail">' + (data.error.length > 100 ? data.error.slice(0, 100) + '...' : data.error) + '</div>';
+        suggestionsContainer.appendChild(errDiv);
+        return;
+      }
+
+      if (data.suggestions) {
+        renderSuggestions(data.suggestions);
+        // Auto-expand when new suggestions arrive
+        if (data.suggestions.length > 0) {
+          suggestionsBody.classList.remove('collapsed');
+          suggestionsArrow.classList.remove('collapsed');
+        }
+      }
+    });
+
+    // ========================================================================
+    // STORYBOARD
+    // ========================================================================
+
+    function showToast(msg, duration = 2500) {
+      toastEl.textContent = msg;
+      toastEl.classList.add('show');
+      setTimeout(() => toastEl.classList.remove('show'), duration);
+    }
+
+    // Init storyboard state on load
+    async function initStoryboard() {
+      try {
+        const data = await window.sceneVisualizer.storyboardList();
+        activeStoryboardId = data.activeStoryboardId;
+        const active = data.storyboards.find(sb => sb.id === activeStoryboardId);
+        activeStoryboardName = active ? active.name : '';
+        commitSbName.textContent = activeStoryboardName || 'Default';
+      } catch (e) {
+        console.log('[Renderer] Storyboard init:', e);
+      }
+    }
+    initStoryboard();
+
+    // Commit button flow
+    commitBtn.addEventListener('click', () => {
+      commitSbName.textContent = activeStoryboardName || 'Default';
+      commitNoteInput.value = '';
+      commitConfirm.classList.add('active');
+    });
+
+    commitCancelBtn.addEventListener('click', () => {
+      commitConfirm.classList.remove('active');
+    });
+
+    commitConfirmBtn.addEventListener('click', async () => {
+      if (!currentImageData) return;
+
+      commitConfirmBtn.disabled = true;
+      commitConfirmBtn.textContent = 'Saving...';
+
+      try {
+        const sceneData = {
+          imageData: currentImageData,
+          prompt: currentPrompt,
+          negativePrompt: currentNegativePrompt,
+          storyExcerpt: currentStoryExcerpt,
+          characters: [],
+          provider: currentGenerationMeta?.provider || '',
+          model: currentGenerationMeta?.model || '',
+          resolution: currentGenerationMeta?.resolution || {},
+          note: commitNoteInput.value.trim(),
+        };
+
+        const result = await window.sceneVisualizer.storyboardCommitScene(activeStoryboardId, sceneData);
+
+        if (result.success) {
+          // Update active storyboard ID if it was auto-created
+          if (result.storyboardId && result.storyboardId !== activeStoryboardId) {
+            activeStoryboardId = result.storyboardId;
+            await initStoryboard();
+          }
+          showToast('Scene committed to storyboard');
+          commitConfirm.classList.remove('active');
+        } else {
+          showToast('Failed: ' + (result.error || 'unknown error'));
+        }
+      } catch (e) {
+        showToast('Error: ' + e.message);
+      } finally {
+        commitConfirmBtn.disabled = false;
+        commitConfirmBtn.textContent = 'Confirm';
+      }
+    });
+
+    // Storyboard viewer
+    storyboardBtn.addEventListener('click', () => openStoryboardViewer());
+    storyboardCloseBtn.addEventListener('click', () => storyboardModal.classList.remove('active'));
+
+    async function openStoryboardViewer() {
+      storyboardModal.classList.add('active');
+      await refreshStoryboardSelect();
+      await renderSceneList();
+    }
+
+    async function refreshStoryboardSelect() {
+      const data = await window.sceneVisualizer.storyboardList();
+      storyboardSelect.innerHTML = '';
+
+      if (data.storyboards.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No storyboards yet';
+        storyboardSelect.appendChild(opt);
+        activeStoryboardId = null;
+        activeStoryboardName = '';
+        return;
+      }
+
+      for (const sb of data.storyboards) {
+        const opt = document.createElement('option');
+        opt.value = sb.id;
+        opt.textContent = `${sb.name} (${sb.sceneCount} scenes)`;
+        if (sb.id === data.activeStoryboardId) opt.selected = true;
+        storyboardSelect.appendChild(opt);
+      }
+
+      activeStoryboardId = data.activeStoryboardId;
+      const active = data.storyboards.find(sb => sb.id === activeStoryboardId);
+      activeStoryboardName = active ? active.name : '';
+      commitSbName.textContent = activeStoryboardName || 'Default';
+    }
+
+    storyboardSelect.addEventListener('change', async () => {
+      const id = storyboardSelect.value;
+      if (id) {
+        await window.sceneVisualizer.storyboardSetActive(id);
+        activeStoryboardId = id;
+        const opt = storyboardSelect.options[storyboardSelect.selectedIndex];
+        activeStoryboardName = opt.textContent.replace(/\s*\(\d+ scenes\)$/, '');
+        commitSbName.textContent = activeStoryboardName;
+        await renderSceneList();
+      }
+    });
+
+    sbNewBtn.addEventListener('click', async () => {
+      const name = prompt('Storyboard name:');
+      if (!name || !name.trim()) return;
+      const result = await window.sceneVisualizer.storyboardCreate(name.trim());
+      await window.sceneVisualizer.storyboardSetActive(result.id);
+      activeStoryboardId = result.id;
+      activeStoryboardName = result.name;
+      commitSbName.textContent = activeStoryboardName;
+      await refreshStoryboardSelect();
+      await renderSceneList();
+    });
+
+    sbDeleteBtn.addEventListener('click', async () => {
+      if (!activeStoryboardId) return;
+      if (!confirm(`Delete storyboard "${activeStoryboardName}" and all its scenes?`)) return;
+      const result = await window.sceneVisualizer.storyboardDelete(activeStoryboardId);
+      activeStoryboardId = result.activeStoryboardId;
+      await refreshStoryboardSelect();
+      await renderSceneList();
+    });
+
+    sbRenameBtn.addEventListener('click', async () => {
+      if (!activeStoryboardId) return;
+      const name = prompt('New name:', activeStoryboardName);
+      if (!name || !name.trim()) return;
+      await window.sceneVisualizer.storyboardRename(activeStoryboardId, name.trim());
+      activeStoryboardName = name.trim();
+      commitSbName.textContent = activeStoryboardName;
+      await refreshStoryboardSelect();
+    });
+
+    async function renderSceneList() {
+      if (!activeStoryboardId) {
+        sceneList.innerHTML = '<div class="scene-empty">No storyboards yet. Generate an image and commit it to start your storyboard.</div>';
+        return;
+      }
+
+      const scenes = await window.sceneVisualizer.storyboardGetScenes(activeStoryboardId);
+      if (!scenes || scenes.length === 0) {
+        sceneList.innerHTML = '<div class="scene-empty">No scenes yet. Generate an image and click "Commit to Storyboard".</div>';
+        return;
+      }
+
+      sceneList.innerHTML = '';
+
+      for (let i = 0; i < scenes.length; i++) {
+        const scene = scenes[i];
+        const card = document.createElement('div');
+        card.className = 'scene-card';
+
+        // Thumbnail (lazy loaded)
+        const thumbDiv = document.createElement('div');
+        thumbDiv.className = 'scene-thumb';
+        thumbDiv.innerHTML = '<span class="thumb-placeholder">Loading...</span>';
+        card.appendChild(thumbDiv);
+
+        // Lazy load image (capture storyboardId to avoid race condition)
+        (async (td, sid, sbId) => {
+          const imgData = await window.sceneVisualizer.storyboardGetSceneImage(sbId, sid);
+          if (imgData) {
+            td.innerHTML = `<img src="${imgData}" alt="Scene">`;
+          } else {
+            td.innerHTML = '<span class="thumb-placeholder">Missing</span>';
+          }
+        })(thumbDiv, scene.id, activeStoryboardId);
+
+        // Metadata
+        const meta = document.createElement('div');
+        meta.className = 'scene-meta';
+
+        const num = document.createElement('div');
+        num.className = 'scene-number';
+        num.textContent = `Scene ${i + 1}`;
+        meta.appendChild(num);
+
+        const ts = document.createElement('div');
+        ts.className = 'scene-timestamp';
+        ts.textContent = new Date(scene.committedAt).toLocaleString();
+        meta.appendChild(ts);
+
+        if (scene.prompt) {
+          const pr = document.createElement('div');
+          pr.className = 'scene-prompt';
+          pr.textContent = scene.prompt.length > 120 ? scene.prompt.slice(0, 120) + '...' : scene.prompt;
+          meta.appendChild(pr);
+        }
+
+        if (scene.storyExcerpt) {
+          const ex = document.createElement('div');
+          ex.className = 'scene-excerpt';
+          ex.textContent = scene.storyExcerpt.length > 100 ? '...' + scene.storyExcerpt.slice(-100) : scene.storyExcerpt;
+          meta.appendChild(ex);
+        }
+
+        if (scene.characters && scene.characters.length > 0) {
+          const ch = document.createElement('div');
+          ch.className = 'scene-chars';
+          ch.textContent = 'Characters: ' + scene.characters.join(', ');
+          meta.appendChild(ch);
+        }
+
+        if (scene.note) {
+          const nt = document.createElement('div');
+          nt.className = 'scene-note';
+          nt.textContent = scene.note;
+          meta.appendChild(nt);
+        }
+
+        const info = document.createElement('div');
+        info.className = 'scene-info';
+        const parts = [];
+        if (scene.provider) parts.push(scene.provider);
+        if (scene.model) parts.push(scene.model);
+        if (scene.resolution && scene.resolution.width) parts.push(`${scene.resolution.width}x${scene.resolution.height}`);
+        if (parts.length > 0) info.textContent = parts.join(' | ');
+        meta.appendChild(info);
+
+        // Actions
+        const actions = document.createElement('div');
+        actions.className = 'scene-actions';
+
+        const editNoteBtn = document.createElement('button');
+        editNoteBtn.textContent = 'Edit Note';
+        editNoteBtn.addEventListener('click', async () => {
+          const note = prompt('Scene note:', scene.note || '');
+          if (note === null) return;
+          await window.sceneVisualizer.storyboardUpdateSceneNote(activeStoryboardId, scene.id, note);
+          await renderSceneList();
+        });
+        actions.appendChild(editNoteBtn);
+
+        const regenBtn = document.createElement('button');
+        regenBtn.textContent = 'Load Prompt';
+        regenBtn.addEventListener('click', () => {
+          currentPrompt = scene.prompt;
+          currentNegativePrompt = scene.negativePrompt || '';
+          promptDisplay.textContent = currentPrompt;
+          imagePanel.classList.remove('hidden');
+          storyboardModal.classList.remove('active');
+          showToast('Prompt loaded — click Generate');
+        });
+        actions.appendChild(regenBtn);
+
+        if (i > 0) {
+          const upBtn = document.createElement('button');
+          upBtn.textContent = 'Move Up';
+          upBtn.addEventListener('click', async () => {
+            const ids = scenes.map(s => s.id);
+            [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]];
+            await window.sceneVisualizer.storyboardReorderScenes(activeStoryboardId, ids);
+            await renderSceneList();
+          });
+          actions.appendChild(upBtn);
+        }
+
+        if (i < scenes.length - 1) {
+          const downBtn = document.createElement('button');
+          downBtn.textContent = 'Move Down';
+          downBtn.addEventListener('click', async () => {
+            const ids = scenes.map(s => s.id);
+            [ids[i], ids[i + 1]] = [ids[i + 1], ids[i]];
+            await window.sceneVisualizer.storyboardReorderScenes(activeStoryboardId, ids);
+            await renderSceneList();
+          });
+          actions.appendChild(downBtn);
+        }
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'danger';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', async () => {
+          if (!confirm('Delete this scene?')) return;
+          await window.sceneVisualizer.storyboardDeleteScene(activeStoryboardId, scene.id);
+          await renderSceneList();
+          await refreshStoryboardSelect();
+        });
+        actions.appendChild(delBtn);
+
+        meta.appendChild(actions);
+        card.appendChild(meta);
+        sceneList.appendChild(card);
+      }
+    }
+
+    // Fallback polling — reduced interval since bridge is primary
     setInterval(async () => {
       if (!isGenerating) {
         try {
@@ -876,7 +2170,7 @@
           // Ignore errors during polling
         }
       }
-    }, 3000);
+    }, 10000);
   </script>
 </body>
 </html>

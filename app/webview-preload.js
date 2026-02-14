@@ -1,119 +1,277 @@
 /**
  * Webview Preload Script
- * This runs in the context of the NovelAI page and creates
- * a bridge for communication between the NovelAI user script
- * and the Electron main process.
+ * Runs inside the NovelAI webview. Exposes a bridge API via contextBridge
+ * so the companion script can send prompts directly to the Electron app.
  */
 
-const { ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
-// Wait for DOM to be ready
-window.addEventListener('DOMContentLoaded', () => {
-  console.log('[WebviewPreload] Initializing Scene Visualizer bridge...');
+contextBridge.exposeInMainWorld('__sceneVisualizerBridge', {
+  // Send prompt to sidebar (no image generation)
+  updatePrompt: (prompt, negativePrompt, storyExcerpt) => {
+    console.log('[WebviewPreload] Sending prompt update via IPC');
+    ipcRenderer.send('prompt-from-webview', { prompt, negativePrompt: negativePrompt || '', storyExcerpt: storyExcerpt || '' });
+  },
 
-  // Create bridge element for communication with NovelAI scripts
-  const bridge = document.createElement('div');
-  bridge.id = 'scene-visualizer-bridge';
-  bridge.style.cssText = 'display:none !important; position:absolute; pointer-events:none;';
-  bridge.dataset.prompt = '';
-  bridge.dataset.status = 'ready';
-  bridge.dataset.image = '';
-  bridge.dataset.error = '';
-  document.body.appendChild(bridge);
+  // Send prompt and request auto-generation
+  requestImage: (prompt, negativePrompt, storyExcerpt) => {
+    console.log('[WebviewPreload] Requesting image generation via IPC');
+    ipcRenderer.send('prompt-from-webview', {
+      prompt,
+      negativePrompt: negativePrompt || '',
+      storyExcerpt: storyExcerpt || '',
+      autoGenerate: true,
+    });
+  },
 
-  console.log('[WebviewPreload] Bridge element created');
+  // Send story suggestions to sidebar
+  updateSuggestions: (data) => {
+    console.log('[WebviewPreload] Sending suggestions update via IPC');
+    ipcRenderer.send('suggestions-from-webview', data);
+  },
 
-  // Watch for prompt changes from NovelAI script
-  const observer = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      if (mutation.type === 'attributes') {
-        const attrName = mutation.attributeName;
+  isConnected: () => true,
+});
 
-        if (attrName === 'data-prompt' && bridge.dataset.status === 'pending') {
-          const promptData = bridge.dataset.prompt;
-          if (promptData) {
-            console.log('[WebviewPreload] Detected prompt request');
-            handlePromptRequest(promptData);
-          }
-        }
-      }
-    }
-  });
+console.log('[WebviewPreload] Scene Visualizer bridge ready (IPC mode)');
 
-  observer.observe(bridge, {
-    attributes: true,
-    attributeFilter: ['data-prompt', 'data-status']
-  });
+// ========================================================================
+// SUGGESTION INSERTION — receives IPC from renderer, inserts into ProseMirror
+// ========================================================================
+ipcRenderer.on('insert-suggestion', (_event, data) => {
+  const text = data && data.text;
+  if (!text) {
+    ipcRenderer.sendToHost('suggestion-inserted', { success: false, error: 'No text provided' });
+    return;
+  }
 
-  async function handlePromptRequest(promptData) {
-    bridge.dataset.status = 'generating';
-    bridge.dataset.error = '';
+  console.log('[WebviewPreload] Received insert-suggestion request, text length:', text.length);
+
+  function findEditor() {
+    return document.querySelector('.ProseMirror[contenteditable="true"]');
+  }
+
+  function moveCursorToEnd(el) {
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  // Strategy 1: Synthetic ClipboardEvent paste (most reliable for ProseMirror)
+  function tryPaste() {
+    const editor = findEditor();
+    if (!editor) return false;
 
     try {
-      // Parse prompt data (may be JSON with prompt + negativePrompt)
-      let prompt, negativePrompt = '';
+      editor.focus();
+      moveCursorToEnd(editor);
 
-      try {
-        const parsed = JSON.parse(promptData);
-        prompt = parsed.prompt;
-        negativePrompt = parsed.negativePrompt || '';
-      } catch (e) {
-        // Plain string prompt
-        prompt = promptData;
-      }
+      const dt = new DataTransfer();
+      dt.setData('text/plain', text);
 
-      console.log('[WebviewPreload] Requesting image generation...');
-
-      // Send to main process via IPC
-      const result = await ipcRenderer.invoke('generate-image', {
-        prompt,
-        negativePrompt
+      const pasteEvent = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
       });
+      // Chromium workaround: clipboardData is read-only on the event, so override it
+      Object.defineProperty(pasteEvent, 'clipboardData', { value: dt });
 
-      if (result.success) {
-        console.log('[WebviewPreload] Image generated successfully');
-        bridge.dataset.image = result.imageData;
-        bridge.dataset.status = 'ready';
-
-        // Dispatch custom event for NovelAI script to detect
-        bridge.dispatchEvent(new CustomEvent('image-ready', {
-          detail: { imageData: result.imageData }
-        }));
-      } else {
-        console.error('[WebviewPreload] Generation failed:', result.error);
-        bridge.dataset.error = result.error;
-        bridge.dataset.status = 'error';
-
-        bridge.dispatchEvent(new CustomEvent('image-error', {
-          detail: { error: result.error }
-        }));
-      }
-    } catch (error) {
-      console.error('[WebviewPreload] Error:', error);
-      bridge.dataset.error = error.message;
-      bridge.dataset.status = 'error';
-
-      bridge.dispatchEvent(new CustomEvent('image-error', {
-        detail: { error: error.message }
-      }));
+      const dispatched = editor.dispatchEvent(pasteEvent);
+      // If ProseMirror handled it, it calls preventDefault() — so dispatched === false means success
+      console.log('[WebviewPreload] Paste strategy dispatched, default prevented:', !dispatched);
+      return !dispatched;
+    } catch (e) {
+      console.warn('[WebviewPreload] Paste strategy error:', e);
+      return false;
     }
   }
 
-  // Expose a simple API to window for NovelAI scripts to use
-  // Note: NovelAI scripts run in a Web Worker and can't access window directly,
-  // but they CAN manipulate the DOM through their UI components
-  window.__sceneVisualizerBridge = {
-    requestImage: (prompt, negativePrompt = '') => {
-      const data = JSON.stringify({ prompt, negativePrompt });
-      bridge.dataset.prompt = data;
-      bridge.dataset.status = 'pending';
-      // Trigger mutation by toggling an attribute
-      bridge.setAttribute('data-request-id', Date.now().toString());
-    },
-    getStatus: () => bridge.dataset.status,
-    getImage: () => bridge.dataset.image,
-    getError: () => bridge.dataset.error
-  };
+  // Strategy 2: InputEvent beforeinput (modern ProseMirror v1.33+)
+  function tryBeforeInput() {
+    const editor = findEditor();
+    if (!editor) return false;
 
-  console.log('[WebviewPreload] Scene Visualizer bridge ready');
+    try {
+      editor.focus();
+      moveCursorToEnd(editor);
+
+      const beforeInputEvent = new InputEvent('beforeinput', {
+        inputType: 'insertText',
+        data: text,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      });
+
+      const dispatched = editor.dispatchEvent(beforeInputEvent);
+      if (!dispatched) {
+        // ProseMirror handled it
+        editor.dispatchEvent(new InputEvent('input', {
+          inputType: 'insertText',
+          data: text,
+          bubbles: true,
+        }));
+        console.log('[WebviewPreload] beforeinput strategy succeeded');
+        return true;
+      }
+      return false;
+    } catch (e) {
+      console.warn('[WebviewPreload] beforeinput strategy error:', e);
+      return false;
+    }
+  }
+
+  // Strategy 3: Real clipboard write + execCommand paste (last resort — overwrites clipboard)
+  function tryClipboardPaste() {
+    const editor = findEditor();
+    if (!editor) return false;
+
+    try {
+      // Write text to system clipboard via a temporary textarea
+      const tmp = document.createElement('textarea');
+      tmp.value = text;
+      tmp.style.position = 'fixed';
+      tmp.style.left = '-9999px';
+      document.body.appendChild(tmp);
+      tmp.select();
+      document.execCommand('copy');
+      document.body.removeChild(tmp);
+
+      // Now focus editor and paste
+      editor.focus();
+      moveCursorToEnd(editor);
+      const ok = document.execCommand('paste');
+      console.log('[WebviewPreload] clipboard-paste strategy result:', ok);
+      return ok;
+    } catch (e) {
+      console.warn('[WebviewPreload] clipboard-paste strategy error:', e);
+      return false;
+    }
+  }
+
+  // Try strategies in order
+  const strategies = [
+    { fn: tryPaste, name: 'paste-event' },
+    { fn: tryBeforeInput, name: 'beforeinput' },
+    { fn: tryClipboardPaste, name: 'clipboard-paste' },
+  ];
+
+  let result = { success: false, error: 'No suitable editor found' };
+
+  for (const strategy of strategies) {
+    try {
+      if (strategy.fn()) {
+        result = { success: true, method: strategy.name };
+        console.log('[WebviewPreload] Insertion succeeded via:', strategy.name);
+        break;
+      }
+    } catch (e) {
+      console.warn(`[WebviewPreload] Strategy ${strategy.name} threw:`, e);
+    }
+  }
+
+  if (!result.success && findEditor()) {
+    result.error = 'Editor found but all insertion strategies failed';
+  }
+
+  ipcRenderer.sendToHost('suggestion-inserted', result);
+});
+
+// Auto-login: detect login page and fill credentials
+async function attemptAutoLogin() {
+  // Get credentials from main process
+  const creds = await ipcRenderer.invoke('get-novelai-credentials');
+  if (!creds.hasCredentials) {
+    console.log('[WebviewPreload] No stored credentials, skipping auto-login');
+    return;
+  }
+  console.log('[WebviewPreload] Credentials found, watching for login form...');
+
+  // Wait for a login form to appear (NovelAI is an SPA — form may appear late)
+  const waitForForm = (maxWait = 15000) => new Promise((resolve) => {
+    const start = Date.now();
+    const check = () => {
+      // Try multiple selectors — NovelAI may use type="email", type="text", or no type
+      const inputs = document.querySelectorAll('input');
+      let emailInput = null;
+      let passwordInput = null;
+
+      for (const input of inputs) {
+        const type = (input.type || '').toLowerCase();
+        const placeholder = (input.placeholder || '').toLowerCase();
+        const name = (input.name || '').toLowerCase();
+        const autocomplete = (input.autocomplete || '').toLowerCase();
+
+        if (type === 'password') {
+          passwordInput = input;
+        } else if (
+          type === 'email' ||
+          placeholder.includes('email') || placeholder.includes('mail') ||
+          name.includes('email') || name.includes('mail') ||
+          autocomplete === 'email' || autocomplete === 'username'
+        ) {
+          emailInput = input;
+        }
+      }
+
+      if (emailInput && passwordInput) return resolve({ emailInput, passwordInput });
+      if (Date.now() - start > maxWait) return resolve(null);
+      setTimeout(check, 500);
+    };
+    check();
+  });
+
+  const form = await waitForForm();
+  if (!form) {
+    console.log('[WebviewPreload] No login form found within timeout — may already be logged in');
+    return;
+  }
+
+  console.log('[WebviewPreload] Login form detected, auto-filling credentials');
+
+  // Set values using native input setter to trigger React's change detection
+  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, 'value'
+  ).set;
+
+  nativeInputValueSetter.call(form.emailInput, creds.email);
+  form.emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+  form.emailInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+  nativeInputValueSetter.call(form.passwordInput, creds.password);
+  form.passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
+  form.passwordInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+  // Wait briefly for React state to update, then click the login button
+  setTimeout(() => {
+    const buttons = document.querySelectorAll('button');
+    for (const btn of buttons) {
+      const text = btn.textContent.trim().toLowerCase();
+      if (text === 'login' || text === 'log in' || text === 'sign in' || text === 'submit') {
+        console.log('[WebviewPreload] Clicking login button:', btn.textContent.trim());
+        btn.click();
+        return;
+      }
+    }
+    // Fallback: look for a submit-type button or form submission
+    const submitBtn = document.querySelector('button[type="submit"], input[type="submit"]');
+    if (submitBtn) {
+      console.log('[WebviewPreload] Clicking submit button (fallback)');
+      submitBtn.click();
+      return;
+    }
+    console.log('[WebviewPreload] Could not find login button');
+  }, 500);
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  // Check if this is the login page
+  if (window.location.href.includes('novelai.net')) {
+    // Small delay to let the page render
+    setTimeout(attemptAutoLogin, 1500);
+  }
 });

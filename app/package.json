@@ -26,7 +26,8 @@
   },
   "dependencies": {
     "adm-zip": "^0.5.10",
-    "electron-store": "^8.1.0"
+    "electron-store": "^8.1.0",
+    "ws": "^8.19.0"
   },
   "build": {
     "appId": "com.contrataco.scene-visualizer",
@@ -38,6 +39,10 @@
       "main.js",
       "preload.js",
       "webview-preload.js",
+      "storyboard.js",
+      "perchance-key.js",
+      "perchance-stealth.js",
+      "providers/**/*",
       "renderer/**/*",
       "node_modules/**/*",
       "package.json"
