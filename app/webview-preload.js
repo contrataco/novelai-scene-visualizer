@@ -60,7 +60,34 @@ ipcRenderer.on('insert-suggestion', (_event, data) => {
     sel.addRange(range);
   }
 
-  // Strategy 1: Synthetic ClipboardEvent paste (most reliable for ProseMirror)
+  // Strategy 1: ProseMirror EditorView transaction (most reliable)
+  // ProseMirror stores a ViewDesc on its DOM elements, giving direct access to the view.
+  function tryProseMirrorTransaction() {
+    const editor = findEditor();
+    if (!editor) return false;
+
+    try {
+      const view = editor.pmViewDesc && editor.pmViewDesc.view;
+      if (!view || !view.state) {
+        console.log('[WebviewPreload] pmViewDesc not found on editor element');
+        return false;
+      }
+
+      editor.focus();
+      const { state } = view;
+      // Insert text at end of document (before the closing node token)
+      const insertPos = state.doc.content.size - 1;
+      const tr = state.tr.insertText('\n' + text, insertPos);
+      view.dispatch(tr);
+      console.log('[WebviewPreload] ProseMirror transaction dispatched successfully');
+      return true;
+    } catch (e) {
+      console.warn('[WebviewPreload] ProseMirror transaction error:', e);
+      return false;
+    }
+  }
+
+  // Strategy 2: Synthetic paste with textContent verification
   function tryPaste() {
     const editor = findEditor();
     if (!editor) return false;
@@ -68,6 +95,8 @@ ipcRenderer.on('insert-suggestion', (_event, data) => {
     try {
       editor.focus();
       moveCursorToEnd(editor);
+
+      const before = editor.textContent;
 
       const dt = new DataTransfer();
       dt.setData('text/plain', text);
@@ -77,21 +106,23 @@ ipcRenderer.on('insert-suggestion', (_event, data) => {
         cancelable: true,
         composed: true,
       });
-      // Chromium workaround: clipboardData is read-only on the event, so override it
       Object.defineProperty(pasteEvent, 'clipboardData', { value: dt });
+      editor.dispatchEvent(pasteEvent);
 
-      const dispatched = editor.dispatchEvent(pasteEvent);
-      // If ProseMirror handled it, it calls preventDefault() — so dispatched === false means success
-      console.log('[WebviewPreload] Paste strategy dispatched, default prevented:', !dispatched);
-      return !dispatched;
+      // Verify text was actually inserted by checking content change
+      const after = editor.textContent;
+      const success = after.length > before.length;
+      console.log('[WebviewPreload] Paste strategy — content changed:', success,
+        '(before:', before.length, 'after:', after.length, ')');
+      return success;
     } catch (e) {
       console.warn('[WebviewPreload] Paste strategy error:', e);
       return false;
     }
   }
 
-  // Strategy 2: InputEvent beforeinput (modern ProseMirror v1.33+)
-  function tryBeforeInput() {
+  // Strategy 3: execCommand insertText with textContent verification (last resort)
+  function tryExecCommand() {
     const editor = findEditor();
     if (!editor) return false;
 
@@ -99,65 +130,25 @@ ipcRenderer.on('insert-suggestion', (_event, data) => {
       editor.focus();
       moveCursorToEnd(editor);
 
-      const beforeInputEvent = new InputEvent('beforeinput', {
-        inputType: 'insertText',
-        data: text,
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-      });
+      const before = editor.textContent;
+      document.execCommand('insertText', false, text);
 
-      const dispatched = editor.dispatchEvent(beforeInputEvent);
-      if (!dispatched) {
-        // ProseMirror handled it
-        editor.dispatchEvent(new InputEvent('input', {
-          inputType: 'insertText',
-          data: text,
-          bubbles: true,
-        }));
-        console.log('[WebviewPreload] beforeinput strategy succeeded');
-        return true;
-      }
-      return false;
+      const after = editor.textContent;
+      const success = after.length > before.length;
+      console.log('[WebviewPreload] execCommand insertText — content changed:', success,
+        '(before:', before.length, 'after:', after.length, ')');
+      return success;
     } catch (e) {
-      console.warn('[WebviewPreload] beforeinput strategy error:', e);
-      return false;
-    }
-  }
-
-  // Strategy 3: Real clipboard write + execCommand paste (last resort — overwrites clipboard)
-  function tryClipboardPaste() {
-    const editor = findEditor();
-    if (!editor) return false;
-
-    try {
-      // Write text to system clipboard via a temporary textarea
-      const tmp = document.createElement('textarea');
-      tmp.value = text;
-      tmp.style.position = 'fixed';
-      tmp.style.left = '-9999px';
-      document.body.appendChild(tmp);
-      tmp.select();
-      document.execCommand('copy');
-      document.body.removeChild(tmp);
-
-      // Now focus editor and paste
-      editor.focus();
-      moveCursorToEnd(editor);
-      const ok = document.execCommand('paste');
-      console.log('[WebviewPreload] clipboard-paste strategy result:', ok);
-      return ok;
-    } catch (e) {
-      console.warn('[WebviewPreload] clipboard-paste strategy error:', e);
+      console.warn('[WebviewPreload] execCommand insertText error:', e);
       return false;
     }
   }
 
   // Try strategies in order
   const strategies = [
+    { fn: tryProseMirrorTransaction, name: 'prosemirror-transaction' },
     { fn: tryPaste, name: 'paste-event' },
-    { fn: tryBeforeInput, name: 'beforeinput' },
-    { fn: tryClipboardPaste, name: 'clipboard-paste' },
+    { fn: tryExecCommand, name: 'execCommand-insertText' },
   ];
 
   let result = { success: false, error: 'No suitable editor found' };

@@ -31,6 +31,14 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   getPerchanceSettings: () => ipcRenderer.invoke('get-perchance-settings'),
   setPerchanceSettings: (settings) => ipcRenderer.invoke('set-perchance-settings', settings),
 
+  // Venice AI
+  getVeniceSettings: () => ipcRenderer.invoke('get-venice-settings'),
+  setVeniceSettings: (settings) => ipcRenderer.invoke('set-venice-settings', settings),
+  setVeniceApiKey: (key) => ipcRenderer.invoke('set-venice-api-key', key),
+  getVeniceApiKeyStatus: () => ipcRenderer.invoke('get-venice-api-key-status'),
+  getVeniceModels: () => ipcRenderer.invoke('get-venice-models'),
+  getVeniceStyles: () => ipcRenderer.invoke('get-venice-styles'),
+
   // Token status
   getTokenStatus: () => ipcRenderer.invoke('get-token-status'),
 

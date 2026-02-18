@@ -253,7 +253,7 @@ async function ensureKeyVerified(userKey) {
     console.log('[Perchance] Key not verified — opening temporary window for verification...');
 
     // Use a separate window so we don't disrupt the API window
-    const ses = session.fromPartition('persist:perchance-verify');
+    const ses = session.fromPartition('persist:perchance-api');
     ses.setUserAgent(CHROME_UA);
 
     const verifyWin = new BrowserWindow({
@@ -261,7 +261,7 @@ async function ensureKeyVerified(userKey) {
       width: 800,
       height: 600,
       webPreferences: {
-        partition: 'persist:perchance-verify',
+        partition: 'persist:perchance-api',
         nodeIntegration: false,
         contextIsolation: false,
         preload: path.join(__dirname, '..', 'perchance-stealth.js'),
@@ -307,6 +307,45 @@ async function ensureKeyVerified(userKey) {
   }
 }
 
+/**
+ * Attempt to acquire a fresh userKey by calling the verifyUser endpoint
+ * through the API BrowserWindow (which has CF cookies). This mirrors
+ * the approach used by the eeemoon/perchance Python library.
+ * Returns the new userKey or null if it fails.
+ */
+async function acquireKeyViaVerifyUser(store) {
+  try {
+    const url = `https://image-generation.perchance.org/api/verifyUser?thread=0&__cacheBust=${Math.random()}`;
+    const result = await browserFetch(url);
+
+    if (!result.ok) {
+      console.log(`[Perchance] verifyUser request failed: HTTP ${result.status}`);
+      return null;
+    }
+
+    // Response is HTML containing the userKey in a script or data attribute
+    const body = result.body;
+    // Try to extract userKey from the response (64-char hex)
+    const match = body.match(/[a-f0-9]{64}/i);
+    if (match) {
+      const newKey = match[0];
+      store.set('perchanceUserKey', newKey);
+      store.set('perchanceKeyAcquiredAt', Date.now());
+      console.log(`[Perchance] Key acquired via verifyUser: ${newKey.substring(0, 10)}...`);
+      return newKey;
+    }
+
+    console.log('[Perchance] verifyUser response did not contain a userKey');
+    return null;
+  } catch (e) {
+    console.log('[Perchance] acquireKeyViaVerifyUser failed:', e.message);
+    return null;
+  }
+}
+
+// Max age before proactive key refresh (45 minutes)
+const KEY_MAX_AGE_MS = 45 * 60 * 1000;
+
 module.exports = {
   id: 'perchance',
   name: 'Perchance (Free)',
@@ -327,9 +366,19 @@ module.exports = {
   },
 
   async generate(prompt, negativePrompt, store) {
-    const userKey = store.get('perchanceUserKey');
+    let userKey = store.get('perchanceUserKey');
     if (!userKey) {
       throw new Error('No Perchance user key. Please extract one in Settings.');
+    }
+
+    // Proactive key refresh if key is older than 45 minutes
+    const keyAge = Date.now() - (store.get('perchanceKeyAcquiredAt') || 0);
+    if (keyAge > KEY_MAX_AGE_MS) {
+      console.log(`[Perchance] Key is ${Math.round(keyAge / 60000)}min old, attempting proactive refresh...`);
+      const freshKey = await acquireKeyViaVerifyUser(store);
+      if (freshKey) {
+        userKey = freshKey;
+      }
     }
 
     const settings = store.get('imageSettings');
@@ -378,9 +427,10 @@ module.exports = {
       guidanceScale: guidanceScale,
     };
 
-    // Retry loop: handles both HTTP 429 and JSON {"status":"too_many_requests"}
+    // Retry loop: handles HTTP 429, JSON too_many_requests, and invalid_key
     let generateData;
-    const maxRetries = 4;
+    const maxRetries = 5;
+    let invalidKeyRetried = false;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       // Update cache-busting params on each attempt
@@ -428,10 +478,21 @@ module.exports = {
       console.log(`[Perchance] Generate response (HTTP ${generateResult.status}): ${generateResult.body.substring(0, 300)}`);
 
       if (generateData.status === 'invalid_key') {
+        if (!invalidKeyRetried) {
+          invalidKeyRetried = true;
+          console.log('[Perchance] Key rejected, attempting to acquire fresh key via verifyUser...');
+          const freshKey = await acquireKeyViaVerifyUser(store);
+          if (freshKey) {
+            userKey = freshKey;
+            generateUrl.searchParams.set('userKey', userKey);
+            continue;
+          }
+        }
+        // Second failure or no fresh key available — wipe and throw
         store.set('perchanceUserKey', '');
+        store.set('perchanceKeyAcquiredAt', 0);
         throw new Error(`Perchance key rejected by API. Response: ${JSON.stringify(generateData)}`);
       }
-
 
       break;
     }

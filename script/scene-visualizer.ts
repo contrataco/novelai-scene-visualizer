@@ -360,11 +360,21 @@ async function clearSuggestions(): Promise<void> {
 }
 
 /**
- * Insert a suggestion into the input area (fallback when not running in Electron).
- * Tries prefill.set first (puts text in input for review), then document.append.
+ * Insert a suggestion into the story.
+ * Tries document.append first (directly adds to story), then prefill.set as fallback.
  */
 async function insertSuggestionFallback(suggestion: Suggestion): Promise<void> {
-  // Try prefill.set — places text in the input area without submitting
+  // Try document.append — directly adds text to the story
+  try {
+    await api.v1.document.append('\n' + suggestion.text);
+    api.v1.ui.toast('Suggestion appended to story', { autoClose: 2000, type: 'success' });
+    api.v1.log(`[SceneVis] Suggestion appended via document.append: "${suggestion.text.slice(0, 50)}..."`);
+    return;
+  } catch (e) {
+    api.v1.log('[SceneVis] document.append failed, trying prefill.set');
+  }
+
+  // Fallback: prefill.set — places text in the input area for review
   try {
     if (api.v1.prefill?.set) {
       await api.v1.prefill.set(suggestion.text);
@@ -372,18 +382,12 @@ async function insertSuggestionFallback(suggestion: Suggestion): Promise<void> {
       api.v1.log(`[SceneVis] Suggestion set via prefill: "${suggestion.text.slice(0, 50)}..."`);
       return;
     }
-  } catch (e) {
-    api.v1.log('[SceneVis] prefill.set failed, trying document.append');
+  } catch (e2) {
+    api.v1.log('[SceneVis] prefill.set also failed');
   }
 
-  // Fallback: append directly to story
-  try {
-    await api.v1.document.append(suggestion.text);
-    api.v1.ui.toast('Suggestion appended to story', { autoClose: 2000, type: 'success' });
-  } catch (e2) {
-    api.v1.error('[SceneVis] All insertion methods failed:', e2);
-    api.v1.ui.toast('Failed to add suggestion — try using the Electron sidebar instead', { autoClose: 4000, type: 'error' });
-  }
+  api.v1.error('[SceneVis] All insertion methods failed');
+  api.v1.ui.toast('Failed to add suggestion', { autoClose: 4000, type: 'error' });
 }
 
 function getTypeColor(type: string): string {
@@ -1071,7 +1075,7 @@ async function initialize(): Promise<void> {
   try {
     api.v1.log('[SceneVis] Initializing Scene Visualizer...');
 
-    // Request storyEdit permission (needed for suggestion insertion via prefill/document)
+    // Request storyEdit permission (needed for suggestion insertion via document.append)
     const hasPermissions = await api.v1.permissions.request(['storyEdit']);
     if (!hasPermissions) {
       api.v1.log('[SceneVis] storyEdit permission not granted — suggestion insertion in script panel may not work');

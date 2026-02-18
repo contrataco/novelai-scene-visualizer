@@ -121,6 +121,7 @@ async function extractPerchanceKeyViaChrome(store) {
       clearTimeout(timeout);
       if (key) {
         store.set('perchanceUserKey', key);
+        store.set('perchanceKeyAcquiredAt', Date.now());
         console.log(`[PerchanceKey] Key captured via Chrome: ${key.substring(0, 10)}...`);
       }
       try { ws?.close(); } catch {}
@@ -257,7 +258,7 @@ async function extractPerchanceKeyViaElectron(store) {
   const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
   return new Promise((resolve) => {
-    const partition = 'persist:perchance-extract';
+    const partition = 'persist:perchance-api';
     const ses = session.fromPartition(partition);
     ses.setUserAgent(CHROME_UA);
 
@@ -283,6 +284,7 @@ async function extractPerchanceKeyViaElectron(store) {
       ses.webRequest.onBeforeSendHeaders(null);
       if (key) {
         store.set('perchanceUserKey', key);
+        store.set('perchanceKeyAcquiredAt', Date.now());
         console.log(`[PerchanceKey] Key extracted via Electron: ${key.substring(0, 10)}...`);
       }
       win.destroy();

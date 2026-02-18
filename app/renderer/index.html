@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://*.novelai.net; script-src 'self' 'unsafe-inline' https://*.novelai.net; style-src 'self' 'unsafe-inline' https://*.novelai.net; img-src 'self' data: https://*.novelai.net https://*.perchance.org blob:; connect-src 'self' https://*.novelai.net wss://*.novelai.net https://*.perchance.org;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://*.novelai.net; script-src 'self' 'unsafe-inline' https://*.novelai.net; style-src 'self' 'unsafe-inline' https://*.novelai.net; img-src 'self' data: https://*.novelai.net https://*.perchance.org blob:; connect-src 'self' https://*.novelai.net wss://*.novelai.net https://*.perchance.org https://api.venice.ai;">
   <title>NovelAI Scene Visualizer</title>
   <style>
     * {
@@ -910,6 +910,7 @@
           <select id="provider">
             <option value="novelai">NovelAI (requires API token)</option>
             <option value="perchance">Perchance (free, lower resolution)</option>
+            <option value="venice">Venice AI (API key)</option>
           </select>
         </div>
       </div>
@@ -965,6 +966,52 @@
           <div class="slider-group">
             <input type="range" id="perchanceGuidance" min="1" max="20" step="0.5" value="7">
             <span class="slider-value" id="perchanceGuidanceValue">7</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Venice AI Settings -->
+      <div class="settings-section" data-provider="venice">
+        <h3>Venice AI</h3>
+        <div class="key-status" id="veniceKeyStatus">
+          <span class="dot inactive" id="veniceKeyDot"></span>
+          <span id="veniceKeyText">No API key</span>
+        </div>
+        <div class="form-group">
+          <label>API Key</label>
+          <div style="display:flex;gap:8px;">
+            <input type="password" id="veniceApiKeyInput" placeholder="Venice AI API key" style="flex:1;">
+            <button class="key-extract-btn" id="saveVeniceKeyBtn">Save</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Model</label>
+          <select id="veniceModel"></select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Steps</label>
+            <input type="number" id="veniceSteps" value="25" min="1" max="50">
+          </div>
+          <div class="form-group">
+            <label>CFG Scale</label>
+            <input type="number" id="veniceCfgScale" value="7" min="0" max="20" step="0.5">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Style Preset</label>
+          <select id="veniceStylePreset">
+            <option value="">None</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group checkbox">
+            <input type="checkbox" id="veniceSafeMode">
+            <label for="veniceSafeMode">Safe Mode</label>
+          </div>
+          <div class="form-group checkbox">
+            <input type="checkbox" id="veniceHideWatermark" checked>
+            <label for="veniceHideWatermark">Hide Watermark</label>
           </div>
         </div>
       </div>
@@ -1175,6 +1222,18 @@
     const perchanceGuidanceSlider = document.getElementById('perchanceGuidance');
     const perchanceGuidanceValue = document.getElementById('perchanceGuidanceValue');
 
+    // Settings elements — Venice AI
+    const veniceKeyDot = document.getElementById('veniceKeyDot');
+    const veniceKeyText = document.getElementById('veniceKeyText');
+    const veniceApiKeyInput = document.getElementById('veniceApiKeyInput');
+    const saveVeniceKeyBtn = document.getElementById('saveVeniceKeyBtn');
+    const veniceModelSelect = document.getElementById('veniceModel');
+    const veniceStepsInput = document.getElementById('veniceSteps');
+    const veniceCfgScaleInput = document.getElementById('veniceCfgScale');
+    const veniceStylePresetSelect = document.getElementById('veniceStylePreset');
+    const veniceSafeModeCheckbox = document.getElementById('veniceSafeMode');
+    const veniceHideWatermarkCheckbox = document.getElementById('veniceHideWatermark');
+
     // Auto-generate toggle
     const autoGenerateToggle = document.getElementById('autoGenerateToggle');
 
@@ -1249,11 +1308,11 @@
         const match = section.dataset.provider === selected;
         section.classList.toggle('provider-visible', match);
       });
-      // Clamp resolution max for Perchance
-      const maxDim = selected === 'perchance' ? 768 : 1536;
+      // Clamp resolution max per provider
+      const maxDim = selected === 'perchance' ? 768 : selected === 'venice' ? 1280 : 1536;
       imgWidth.max = maxDim;
       imgHeight.max = maxDim;
-      if (selected === 'perchance') {
+      if (selected === 'perchance' || selected === 'venice') {
         if (parseInt(imgWidth.value) > maxDim) imgWidth.value = maxDim;
         if (parseInt(imgHeight.value) > maxDim) imgHeight.value = maxDim;
       }
@@ -1310,6 +1369,68 @@
         perchanceKeyText.textContent = 'Error saving key: ' + e.message;
       }
     });
+
+    // Venice AI key save
+    saveVeniceKeyBtn.addEventListener('click', async () => {
+      const key = veniceApiKeyInput.value.trim();
+      if (!key) {
+        veniceKeyDot.className = 'dot inactive';
+        veniceKeyText.textContent = 'Please enter an API key';
+        return;
+      }
+      try {
+        const result = await window.sceneVisualizer.setVeniceApiKey(key);
+        if (result.success) {
+          veniceKeyDot.className = 'dot active';
+          veniceKeyText.textContent = 'API key saved';
+          veniceApiKeyInput.value = '';
+          // Refresh models and styles after key is saved
+          await loadVeniceModels();
+          await loadVeniceStyles();
+        }
+      } catch (e) {
+        veniceKeyText.textContent = 'Error saving key: ' + e.message;
+      }
+    });
+
+    // Load Venice models into dropdown
+    async function loadVeniceModels() {
+      try {
+        const models = await window.sceneVisualizer.getVeniceModels();
+        veniceModelSelect.innerHTML = '';
+        if (models.length === 0) {
+          const opt = document.createElement('option');
+          opt.value = 'flux-2-max';
+          opt.textContent = 'flux-2-max (default)';
+          veniceModelSelect.appendChild(opt);
+          return;
+        }
+        for (const model of models) {
+          const opt = document.createElement('option');
+          opt.value = model.id;
+          opt.textContent = model.name;
+          veniceModelSelect.appendChild(opt);
+        }
+      } catch (e) {
+        console.error('Failed to load Venice models:', e);
+      }
+    }
+
+    // Load Venice styles into dropdown
+    async function loadVeniceStyles() {
+      try {
+        const styles = await window.sceneVisualizer.getVeniceStyles();
+        veniceStylePresetSelect.innerHTML = '<option value="">None</option>';
+        for (const style of styles) {
+          const opt = document.createElement('option');
+          opt.value = style.id;
+          opt.textContent = style.name;
+          veniceStylePresetSelect.appendChild(opt);
+        }
+      } catch (e) {
+        console.error('Failed to load Venice styles:', e);
+      }
+    }
 
     // Populate NovelAI art styles on load
     (async function loadNovelaiArtStyles() {
@@ -1503,13 +1624,15 @@
 
     // Settings
     settingsBtn.addEventListener('click', async () => {
-      const [token, settings, currentProvider, keyStatus, perchanceSettings, novelaiArtStyle] = await Promise.all([
+      const [token, settings, currentProvider, keyStatus, perchanceSettings, novelaiArtStyle, veniceSettings, veniceKeyStatus] = await Promise.all([
         window.sceneVisualizer.getApiToken(),
         window.sceneVisualizer.getImageSettings(),
         window.sceneVisualizer.getProvider(),
         window.sceneVisualizer.getPerchanceKeyStatus(),
         window.sceneVisualizer.getPerchanceSettings(),
         window.sceneVisualizer.getNovelaiArtStyle(),
+        window.sceneVisualizer.getVeniceSettings(),
+        window.sceneVisualizer.getVeniceApiKeyStatus(),
       ]);
 
       // Provider
@@ -1532,6 +1655,26 @@
 
       // NovelAI art style
       novelaiArtStyleSelect.value = novelaiArtStyle || 'no-style';
+
+      // Venice AI settings
+      if (veniceKeyStatus.hasKey) {
+        veniceKeyDot.className = 'dot active';
+        veniceKeyText.textContent = 'API key configured';
+      } else {
+        veniceKeyDot.className = 'dot inactive';
+        veniceKeyText.textContent = 'No API key';
+      }
+      veniceApiKeyInput.value = '';
+      veniceApiKeyInput.placeholder = veniceKeyStatus.hasKey ? 'Key configured (enter new to replace)' : 'Venice AI API key';
+      veniceStepsInput.value = veniceSettings.steps || 25;
+      veniceCfgScaleInput.value = veniceSettings.cfgScale || 7;
+      veniceSafeModeCheckbox.checked = veniceSettings.safeMode || false;
+      veniceHideWatermarkCheckbox.checked = veniceSettings.hideWatermark !== false;
+      // Load Venice models and styles (async, populates dropdowns)
+      await loadVeniceModels();
+      veniceModelSelect.value = veniceSettings.model || 'flux-2-max';
+      await loadVeniceStyles();
+      veniceStylePresetSelect.value = veniceSettings.stylePreset || '';
 
       // NovelAI token status
       const tokenStatus = await window.sceneVisualizer.getTokenStatus();
@@ -1626,6 +1769,23 @@
         artStyle: perchanceArtStyleSelect.value,
         guidanceScale: parseFloat(perchanceGuidanceSlider.value),
       });
+
+      // Venice AI settings
+      await window.sceneVisualizer.setVeniceSettings({
+        model: veniceModelSelect.value,
+        steps: parseInt(veniceStepsInput.value),
+        cfgScale: parseFloat(veniceCfgScaleInput.value),
+        stylePreset: veniceStylePresetSelect.value,
+        safeMode: veniceSafeModeCheckbox.checked,
+        hideWatermark: veniceHideWatermarkCheckbox.checked,
+      });
+
+      // Venice API key (only if entered)
+      const veniceKey = veniceApiKeyInput.value.trim();
+      if (veniceKey) {
+        await window.sceneVisualizer.setVeniceApiKey(veniceKey);
+        veniceApiKeyInput.value = '';
+      }
 
       await window.sceneVisualizer.setImageSettings({
         // Model

@@ -6,12 +6,14 @@ const Store = require('electron-store');
 // Providers
 const novelaiProvider = require('./providers/novelai');
 const perchanceProvider = require('./providers/perchance');
+const veniceProvider = require('./providers/venice');
 const { extractPerchanceKey, verifyPerchanceKey } = require('./perchance-key');
 const storyboard = require('./storyboard');
 
 const PROVIDERS = {
   [novelaiProvider.id]: novelaiProvider,
   [perchanceProvider.id]: perchanceProvider,
+  [veniceProvider.id]: veniceProvider,
 };
 
 // Secure storage for API token and settings
@@ -26,6 +28,14 @@ const store = new Store({
     novelaiArtStyle: { type: 'string', default: 'no-style' },
     perchanceArtStyle: { type: 'string', default: 'no-style' },
     perchanceGuidanceScale: { type: 'number', default: 7 },
+    perchanceKeyAcquiredAt: { type: 'number', default: 0 },
+    veniceApiKey: { type: 'string', default: '' },
+    veniceModel: { type: 'string', default: 'flux-2-max' },
+    veniceSteps: { type: 'number', default: 25 },
+    veniceCfgScale: { type: 'number', default: 7 },
+    veniceStylePreset: { type: 'string', default: '' },
+    veniceSafeMode: { type: 'boolean', default: false },
+    veniceHideWatermark: { type: 'boolean', default: true },
     imageSettings: {
       type: 'object',
       default: {
@@ -159,6 +169,17 @@ function loadEnvCredentials() {
   }
 }
 
+// Seed Venice API key from .env if store is empty
+(function seedVeniceKey() {
+  if (!store.get('veniceApiKey')) {
+    const env = loadEnvCredentials();
+    if (env.VENICE_API_KEY) {
+      store.set('veniceApiKey', env.VENICE_API_KEY);
+      console.log('[Main] Venice API key loaded from .env');
+    }
+  }
+})();
+
 // Get NovelAI credentials (.env primary, store fallback)
 ipcMain.handle('get-novelai-credentials', () => {
   const env = loadEnvCredentials();
@@ -236,6 +257,7 @@ ipcMain.handle('get-perchance-key-status', async () => {
   if (status === 'not_verified') {
     // Only clear on definitive "not_verified" from the API (not CF blocks)
     store.set('perchanceUserKey', '');
+    store.set('perchanceKeyAcquiredAt', 0);
     return { hasKey: false, preview: '', expired: true };
   }
   // 'valid' or 'unknown' (CF blocked) — keep the key
@@ -244,6 +266,7 @@ ipcMain.handle('get-perchance-key-status', async () => {
 
 ipcMain.handle('set-perchance-key', (event, key) => {
   store.set('perchanceUserKey', key);
+  store.set('perchanceKeyAcquiredAt', Date.now());
   console.log(`[Main] Perchance key set manually: ${key.substring(0, 10)}...`);
   return { success: true };
 });
@@ -278,6 +301,46 @@ ipcMain.handle('get-novelai-art-style', () => {
 ipcMain.handle('set-novelai-art-style', (event, styleId) => {
   store.set('novelaiArtStyle', styleId);
   return { success: true };
+});
+
+// IPC Handlers — Venice AI
+ipcMain.handle('get-venice-settings', () => {
+  return {
+    model: store.get('veniceModel') || 'flux-2-max',
+    steps: store.get('veniceSteps') || 25,
+    cfgScale: store.get('veniceCfgScale') || 7,
+    stylePreset: store.get('veniceStylePreset') || '',
+    safeMode: store.get('veniceSafeMode') || false,
+    hideWatermark: store.get('veniceHideWatermark') !== false,
+  };
+});
+
+ipcMain.handle('set-venice-settings', (event, settings) => {
+  if (settings.model !== undefined) store.set('veniceModel', settings.model);
+  if (settings.steps !== undefined) store.set('veniceSteps', settings.steps);
+  if (settings.cfgScale !== undefined) store.set('veniceCfgScale', settings.cfgScale);
+  if (settings.stylePreset !== undefined) store.set('veniceStylePreset', settings.stylePreset);
+  if (settings.safeMode !== undefined) store.set('veniceSafeMode', settings.safeMode);
+  if (settings.hideWatermark !== undefined) store.set('veniceHideWatermark', settings.hideWatermark);
+  return { success: true };
+});
+
+ipcMain.handle('set-venice-api-key', (event, key) => {
+  store.set('veniceApiKey', key);
+  console.log('[Main] Venice API key set');
+  return { success: true };
+});
+
+ipcMain.handle('get-venice-api-key-status', () => {
+  return { hasKey: !!store.get('veniceApiKey') };
+});
+
+ipcMain.handle('get-venice-models', async () => {
+  return veniceProvider.fetchModelsForUI(store);
+});
+
+ipcMain.handle('get-venice-styles', async () => {
+  return veniceProvider.fetchStylesForUI(store);
 });
 
 // IPC Handlers — API token (unchanged)
