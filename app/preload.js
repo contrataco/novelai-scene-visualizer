@@ -39,6 +39,13 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   getVeniceModels: () => ipcRenderer.invoke('get-venice-models'),
   getVeniceStyles: () => ipcRenderer.invoke('get-venice-styles'),
 
+  // Pollo AI
+  getPolloSettings: () => ipcRenderer.invoke('get-pollo-settings'),
+  setPolloSettings: (settings) => ipcRenderer.invoke('set-pollo-settings', settings),
+  getPolloModels: () => ipcRenderer.invoke('get-pollo-models'),
+  getPolloLoginStatus: () => ipcRenderer.invoke('get-pollo-login-status'),
+  polloLogin: () => ipcRenderer.invoke('pollo-login'),
+
   // Token status
   getTokenStatus: () => ipcRenderer.invoke('get-token-status'),
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://*.novelai.net; script-src 'self' 'unsafe-inline' https://*.novelai.net; style-src 'self' 'unsafe-inline' https://*.novelai.net; img-src 'self' data: https://*.novelai.net https://*.perchance.org blob:; connect-src 'self' https://*.novelai.net wss://*.novelai.net https://*.perchance.org https://api.venice.ai;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://*.novelai.net; script-src 'self' 'unsafe-inline' https://*.novelai.net; style-src 'self' 'unsafe-inline' https://*.novelai.net; img-src 'self' data: https://*.novelai.net https://*.perchance.org https://*.pollo.ai blob:; connect-src 'self' https://*.novelai.net wss://*.novelai.net https://*.perchance.org https://api.venice.ai https://pollo.ai https://*.pollo.ai;">
   <title>NovelAI Scene Visualizer</title>
   <style>
     * {
@@ -911,6 +911,7 @@
             <option value="novelai">NovelAI (requires API token)</option>
             <option value="perchance">Perchance (free, lower resolution)</option>
             <option value="venice">Venice AI (API key)</option>
+            <option value="pollo">Pollo AI (browser login)</option>
           </select>
         </div>
       </div>
@@ -1013,6 +1014,30 @@
             <input type="checkbox" id="veniceHideWatermark" checked>
             <label for="veniceHideWatermark">Hide Watermark</label>
           </div>
+        </div>
+      </div>
+
+      <!-- Pollo AI Settings -->
+      <div class="settings-section" data-provider="pollo">
+        <h3>Pollo AI</h3>
+        <div class="key-status" id="polloLoginStatus">
+          <span class="dot inactive" id="polloLoginDot"></span>
+          <span id="polloLoginText">Not logged in</span>
+        </div>
+        <button class="key-extract-btn" id="polloLoginBtn">Login to Pollo AI</button>
+        <div class="form-group" style="margin-top: 12px;">
+          <label>Model</label>
+          <select id="polloModel"></select>
+        </div>
+        <div class="form-group">
+          <label>Aspect Ratio</label>
+          <select id="polloAspectRatio">
+            <option value="1:1">1:1 (Square)</option>
+            <option value="16:9">16:9 (Landscape)</option>
+            <option value="9:16">9:16 (Portrait)</option>
+            <option value="4:3">4:3 (Landscape)</option>
+            <option value="3:4">3:4 (Portrait)</option>
+          </select>
         </div>
       </div>
 
@@ -1234,6 +1259,13 @@
     const veniceSafeModeCheckbox = document.getElementById('veniceSafeMode');
     const veniceHideWatermarkCheckbox = document.getElementById('veniceHideWatermark');
 
+    // Settings elements — Pollo AI
+    const polloLoginDot = document.getElementById('polloLoginDot');
+    const polloLoginText = document.getElementById('polloLoginText');
+    const polloLoginBtn = document.getElementById('polloLoginBtn');
+    const polloModelSelect = document.getElementById('polloModel');
+    const polloAspectRatioSelect = document.getElementById('polloAspectRatio');
+
     // Auto-generate toggle
     const autoGenerateToggle = document.getElementById('autoGenerateToggle');
 
@@ -1309,10 +1341,11 @@
         section.classList.toggle('provider-visible', match);
       });
       // Clamp resolution max per provider
-      const maxDim = selected === 'perchance' ? 768 : selected === 'venice' ? 1280 : 1536;
+      const maxDimMap = { perchance: 768, venice: 1280 };
+      const maxDim = maxDimMap[selected] || 1536;
       imgWidth.max = maxDim;
       imgHeight.max = maxDim;
-      if (selected === 'perchance' || selected === 'venice') {
+      if (maxDim < 1536) {
         if (parseInt(imgWidth.value) > maxDim) imgWidth.value = maxDim;
         if (parseInt(imgHeight.value) > maxDim) imgHeight.value = maxDim;
       }
@@ -1392,6 +1425,53 @@
         veniceKeyText.textContent = 'Error saving key: ' + e.message;
       }
     });
+
+    // Pollo AI login button
+    polloLoginBtn.addEventListener('click', async () => {
+      polloLoginBtn.disabled = true;
+      polloLoginBtn.textContent = 'Opening login window...';
+      polloLoginText.textContent = 'Login window opened — please log in';
+      try {
+        const result = await window.sceneVisualizer.polloLogin();
+        if (result.success) {
+          polloLoginDot.className = 'dot active';
+          polloLoginText.textContent = 'Logged in';
+          await loadPolloModels();
+        } else {
+          polloLoginDot.className = 'dot inactive';
+          polloLoginText.textContent = 'Login cancelled or failed';
+        }
+      } catch (e) {
+        polloLoginDot.className = 'dot inactive';
+        polloLoginText.textContent = 'Error: ' + e.message;
+      } finally {
+        polloLoginBtn.disabled = false;
+        polloLoginBtn.textContent = 'Login to Pollo AI';
+      }
+    });
+
+    // Load Pollo models into dropdown
+    async function loadPolloModels() {
+      try {
+        const models = await window.sceneVisualizer.getPolloModels();
+        polloModelSelect.innerHTML = '';
+        if (models.length === 0) {
+          const opt = document.createElement('option');
+          opt.value = 'flux-schnell';
+          opt.textContent = 'flux-schnell (default)';
+          polloModelSelect.appendChild(opt);
+          return;
+        }
+        for (const model of models) {
+          const opt = document.createElement('option');
+          opt.value = model.id;
+          opt.textContent = model.brand ? `${model.name} (${model.brand})` : model.name;
+          polloModelSelect.appendChild(opt);
+        }
+      } catch (e) {
+        console.error('Failed to load Pollo models:', e);
+      }
+    }
 
     // Load Venice models into dropdown
     async function loadVeniceModels() {
@@ -1624,7 +1704,7 @@
 
     // Settings
     settingsBtn.addEventListener('click', async () => {
-      const [token, settings, currentProvider, keyStatus, perchanceSettings, novelaiArtStyle, veniceSettings, veniceKeyStatus] = await Promise.all([
+      const [token, settings, currentProvider, keyStatus, perchanceSettings, novelaiArtStyle, veniceSettings, veniceKeyStatus, polloSettings, polloLoginStatus] = await Promise.all([
         window.sceneVisualizer.getApiToken(),
         window.sceneVisualizer.getImageSettings(),
         window.sceneVisualizer.getProvider(),
@@ -1633,6 +1713,8 @@
         window.sceneVisualizer.getNovelaiArtStyle(),
         window.sceneVisualizer.getVeniceSettings(),
         window.sceneVisualizer.getVeniceApiKeyStatus(),
+        window.sceneVisualizer.getPolloSettings(),
+        window.sceneVisualizer.getPolloLoginStatus(),
       ]);
 
       // Provider
@@ -1675,6 +1757,18 @@
       veniceModelSelect.value = veniceSettings.model || 'flux-2-max';
       await loadVeniceStyles();
       veniceStylePresetSelect.value = veniceSettings.stylePreset || '';
+
+      // Pollo AI settings
+      if (polloLoginStatus.loggedIn) {
+        polloLoginDot.className = 'dot active';
+        polloLoginText.textContent = 'Logged in';
+      } else {
+        polloLoginDot.className = 'dot inactive';
+        polloLoginText.textContent = 'Not logged in';
+      }
+      await loadPolloModels();
+      polloModelSelect.value = polloSettings.model || 'flux-schnell';
+      polloAspectRatioSelect.value = polloSettings.aspectRatio || '1:1';
 
       // NovelAI token status
       const tokenStatus = await window.sceneVisualizer.getTokenStatus();
@@ -1786,6 +1880,12 @@
         await window.sceneVisualizer.setVeniceApiKey(veniceKey);
         veniceApiKeyInput.value = '';
       }
+
+      // Pollo AI settings
+      await window.sceneVisualizer.setPolloSettings({
+        model: polloModelSelect.value,
+        aspectRatio: polloAspectRatioSelect.value,
+      });
 
       await window.sceneVisualizer.setImageSettings({
         // Model

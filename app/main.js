@@ -7,6 +7,7 @@ const Store = require('electron-store');
 const novelaiProvider = require('./providers/novelai');
 const perchanceProvider = require('./providers/perchance');
 const veniceProvider = require('./providers/venice');
+const polloProvider = require('./providers/pollo');
 const { extractPerchanceKey, verifyPerchanceKey } = require('./perchance-key');
 const storyboard = require('./storyboard');
 
@@ -14,6 +15,7 @@ const PROVIDERS = {
   [novelaiProvider.id]: novelaiProvider,
   [perchanceProvider.id]: perchanceProvider,
   [veniceProvider.id]: veniceProvider,
+  [polloProvider.id]: polloProvider,
 };
 
 // Secure storage for API token and settings
@@ -36,6 +38,9 @@ const store = new Store({
     veniceStylePreset: { type: 'string', default: '' },
     veniceSafeMode: { type: 'boolean', default: false },
     veniceHideWatermark: { type: 'boolean', default: true },
+    polloModel: { type: 'string', default: 'flux-schnell' },
+    polloAspectRatio: { type: 'string', default: '1:1' },
+    polloNumOutputs: { type: 'number', default: 1 },
     imageSettings: {
       type: 'object',
       default: {
@@ -341,6 +346,35 @@ ipcMain.handle('get-venice-models', async () => {
 
 ipcMain.handle('get-venice-styles', async () => {
   return veniceProvider.fetchStylesForUI(store);
+});
+
+// IPC Handlers — Pollo AI
+ipcMain.handle('get-pollo-settings', () => {
+  return {
+    model: store.get('polloModel') || 'flux-schnell',
+    aspectRatio: store.get('polloAspectRatio') || '1:1',
+    numOutputs: store.get('polloNumOutputs') || 1,
+  };
+});
+
+ipcMain.handle('set-pollo-settings', (event, settings) => {
+  if (settings.model !== undefined) store.set('polloModel', settings.model);
+  if (settings.aspectRatio !== undefined) store.set('polloAspectRatio', settings.aspectRatio);
+  if (settings.numOutputs !== undefined) store.set('polloNumOutputs', settings.numOutputs);
+  return { success: true };
+});
+
+ipcMain.handle('get-pollo-models', async () => {
+  return polloProvider.fetchModelsForUI();
+});
+
+ipcMain.handle('get-pollo-login-status', async () => {
+  return { loggedIn: await polloProvider.checkLoginStatus() };
+});
+
+ipcMain.handle('pollo-login', async () => {
+  const result = await polloProvider.openLoginWindow();
+  return { success: result };
 });
 
 // IPC Handlers — API token (unchanged)
