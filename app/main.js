@@ -125,9 +125,26 @@ function setupTokenInterception() {
   );
 }
 
+// Track current story context in memory
+let currentStoryContext = { storyId: null, storyTitle: null };
+
+// Relay story context from webview to renderer
+ipcMain.on('story-context-from-webview', (event, data) => {
+  currentStoryContext = { storyId: data.storyId || null, storyTitle: data.storyTitle || null };
+  console.log('[Main] Story context updated:', currentStoryContext.storyId, currentStoryContext.storyTitle);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('story-context-update', currentStoryContext);
+  }
+});
+
 // Relay prompts from webview to renderer
 ipcMain.on('prompt-from-webview', (event, data) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
+    // Include story context if present in data or from stored context
+    if (!data.storyId && currentStoryContext.storyId) {
+      data.storyId = currentStoryContext.storyId;
+      data.storyTitle = currentStoryContext.storyTitle;
+    }
     mainWindow.webContents.send('prompt-update', data);
   }
 });
@@ -200,26 +217,184 @@ ipcMain.handle('set-novelai-credentials', (event, { email, password }) => {
   return { success: true };
 });
 
-// IPC Handlers — Image generation (delegates to active provider)
-ipcMain.handle('generate-image', async (event, { prompt, negativePrompt }) => {
+// ---------------------------------------------------------------------------
+// Blank image detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect if a data URI represents a blank/black image (common when content is
+ * silently filtered by providers). Uses two heuristics:
+ * 1. Size — real images at 512px+ are typically 100KB+; all-black PNGs compress
+ *    to ~2-5KB.
+ * 2. Byte variance — sample ~200 bytes spread across the image data; if fewer
+ *    than 4 distinct values appear, the image is likely uniform/blank.
+ * Returns true only if both checks agree.
+ */
+function isBlankImage(dataUri) {
   try {
-    const provider = getActiveProvider();
+    const base64 = dataUri.replace(/^data:image\/[^;]+;base64,/, '');
+    const buf = Buffer.from(base64, 'base64');
+
+    // Size check: suspicious if < 15KB
+    const isTiny = buf.length < 15 * 1024;
+
+    // Byte variance check: sample ~200 bytes evenly, skip 100-byte header
+    const sampleCount = 200;
+    const start = Math.min(100, Math.floor(buf.length * 0.1));
+    const range = buf.length - start;
+    if (range <= 0) return isTiny; // degenerate case
+
+    const step = Math.max(1, Math.floor(range / sampleCount));
+    const seen = new Set();
+    for (let i = start; i < buf.length && seen.size < 10; i += step) {
+      seen.add(buf[i]);
+    }
+    const isUniform = seen.size < 4;
+
+    return isTiny && isUniform;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Content restriction error detection
+// ---------------------------------------------------------------------------
+
+const CONTENT_RESTRICTION_KEYWORDS = [
+  'content_policy', 'content policy', 'nsfw', 'restricted', 'safety',
+  'moderation', 'blocked', 'inappropriate', 'not allowed', 'violat',
+];
+
+function isContentRestrictionError(errorMessage) {
+  if (!errorMessage) return false;
+  const lower = errorMessage.toLowerCase();
+  return CONTENT_RESTRICTION_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+// ---------------------------------------------------------------------------
+// Model fallback helper (Venice / Pollo only)
+// ---------------------------------------------------------------------------
+
+async function tryModelFallback(provider, providerId, prompt, negativePrompt) {
+  const modelStoreKey = { venice: 'veniceModel', pollo: 'polloModel' }[providerId];
+  if (!modelStoreKey) return null;
+
+  const currentModel = store.get(modelStoreKey);
+
+  // Use cached models; if cache is empty, fetch fresh list
+  let models = provider.getModels();
+  if (!models || models.length === 0) {
+    try {
+      models = await provider.fetchModelsForUI(store);
+    } catch {
+      return null;
+    }
+  }
+  if (!models || models.length < 2) return null;
+
+  const fallback = models.find(m => m.id !== currentModel);
+  if (!fallback) return null;
+
+  console.log(`[Main] Trying fallback model: ${fallback.id} (was: ${currentModel})`);
+
+  store.set(modelStoreKey, fallback.id);
+  try {
+    const imageData = await provider.generate(prompt, negativePrompt, store);
+    if (!isBlankImage(imageData)) {
+      return { imageData, fallbackModel: fallback.id };
+    }
+    console.log('[Main] Fallback model also returned blank image');
+  } catch (e) {
+    console.log(`[Main] Fallback model failed: ${e.message}`);
+  } finally {
+    store.set(modelStoreKey, currentModel);
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// IPC Handlers — Image generation (with retry + model fallback)
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('generate-image', async (event, { prompt, negativePrompt }) => {
+  const provider = getActiveProvider();
+  const providerId = store.get('provider') || 'novelai';
+  const settings = store.get('imageSettings');
+
+  const makeMeta = (extra = {}) => ({
+    provider: providerId,
+    model: settings.model || '',
+    resolution: { width: settings.width || 832, height: settings.height || 1216 },
+    ...extra,
+  });
+
+  let lastError = null;
+
+  // --- Attempt 1: normal generation ---
+  try {
     console.log(`[Main] Generating via ${provider.name}...`);
     const imageData = await provider.generate(prompt, negativePrompt, store);
-    const settings = store.get('imageSettings');
+    if (!isBlankImage(imageData)) {
+      return { success: true, imageData, meta: makeMeta() };
+    }
+    console.log('[Main] Blank image detected, retrying with new seed...');
+  } catch (e) {
+    lastError = e;
+    console.error('[Main] Generation attempt 1 failed:', e.message);
+    if (isContentRestrictionError(e.message)) {
+      const fb = await tryModelFallback(provider, providerId, prompt, negativePrompt);
+      if (fb) {
+        return {
+          success: true,
+          imageData: fb.imageData,
+          meta: makeMeta({ retried: true, fallbackModel: fb.fallbackModel }),
+        };
+      }
+      return { success: false, error: e.message, contentRestricted: true };
+    }
+  }
+
+  // --- Attempt 2: retry (blank image or transient error) ---
+  try {
+    const imageData = await provider.generate(prompt, negativePrompt, store);
+    if (!isBlankImage(imageData)) {
+      return { success: true, imageData, meta: makeMeta({ retried: true }) };
+    }
+    console.log('[Main] Blank image on retry, trying model fallback...');
+  } catch (e) {
+    lastError = e;
+    console.error('[Main] Generation attempt 2 failed:', e.message);
+    if (isContentRestrictionError(e.message)) {
+      const fb = await tryModelFallback(provider, providerId, prompt, negativePrompt);
+      if (fb) {
+        return {
+          success: true,
+          imageData: fb.imageData,
+          meta: makeMeta({ retried: true, fallbackModel: fb.fallbackModel }),
+        };
+      }
+      return { success: false, error: e.message, contentRestricted: true };
+    }
+  }
+
+  // --- Attempt 3: model fallback ---
+  const fb = await tryModelFallback(provider, providerId, prompt, negativePrompt);
+  if (fb) {
     return {
       success: true,
-      imageData,
-      meta: {
-        provider: provider.id,
-        model: settings.model || '',
-        resolution: { width: settings.width || 832, height: settings.height || 1216 },
-      },
+      imageData: fb.imageData,
+      meta: makeMeta({ retried: true, fallbackModel: fb.fallbackModel }),
     };
-  } catch (error) {
-    console.error('[Main] Image generation failed:', error);
-    return { success: false, error: error.message };
   }
+
+  // --- All attempts exhausted ---
+  return {
+    success: false,
+    error: lastError?.message || 'Image generation failed (blank image detected)',
+    blankDetected: !lastError,
+  };
 });
 
 // IPC Handlers — Models (delegates to active provider)
@@ -413,6 +588,9 @@ ipcMain.handle('storyboard:delete-scene', (event, { storyboardId, sceneId }) => 
 ipcMain.handle('storyboard:reorder-scenes', (event, { storyboardId, sceneIds }) => storyboard.reorderScenes(storyboardId, sceneIds));
 ipcMain.handle('storyboard:update-scene-note', (event, { storyboardId, sceneId, note }) => storyboard.updateSceneNote(storyboardId, sceneId, note));
 ipcMain.handle('storyboard:get-scene-image', (event, { storyboardId, sceneId }) => storyboard.getSceneImage(storyboardId, sceneId));
+ipcMain.handle('storyboard:get-or-create-for-story', (event, { storyId, storyTitle }) => storyboard.getOrCreateForStory(storyId, storyTitle));
+ipcMain.handle('storyboard:associate-with-story', (event, { storyboardId, storyId, storyTitle }) => storyboard.associateWithStory(storyboardId, storyId, storyTitle));
+ipcMain.handle('storyboard:dissociate-from-story', (event, { storyboardId }) => storyboard.dissociateFromStory(storyboardId));
 
 app.whenReady().then(() => {
   setupTokenInterception();

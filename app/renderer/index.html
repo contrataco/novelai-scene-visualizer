@@ -1639,6 +1639,45 @@
     webview.addEventListener('did-finish-load', () => {
       status.textContent = 'Connected';
       status.className = 'status connected';
+
+      // Poll webview for story context. The script sandbox can't use
+      // contextBridge or write to page DOM, so we extract story identity
+      // directly from NovelAI's page state via executeJavaScript.
+      let lastPolledStoryId = null;
+      setInterval(async () => {
+        try {
+          const ctx = await webview.executeJavaScript(`
+            (function() {
+              // Check for companion script's DOM element first
+              var el = document.getElementById('scene-vis-story-context');
+              if (el && el.dataset.storyId) {
+                return { storyId: el.dataset.storyId, storyTitle: el.dataset.storyTitle || '' };
+              }
+              // Extract story ID from NovelAI URL query param (/stories?id=uuid)
+              var params = new URLSearchParams(window.location.search);
+              var storyId = params.get('id');
+              if (storyId) {
+                // Try document.title (NovelAI sets it to "Story Title - NovelAI")
+                var title = '';
+                var dt = document.title || '';
+                var sep = dt.lastIndexOf(' - NovelAI');
+                if (sep > 0) {
+                  title = dt.substring(0, sep).trim();
+                }
+                return { storyId: storyId, storyTitle: title };
+              }
+              return null;
+            })()
+          `);
+          if (ctx && ctx.storyId && ctx.storyId !== lastPolledStoryId) {
+            lastPolledStoryId = ctx.storyId;
+            console.log('[Renderer] Story context from webview poll:', ctx.storyId, ctx.storyTitle);
+            handleStoryContextChange(ctx.storyId, ctx.storyTitle);
+          }
+        } catch (e) {
+          // Webview not ready or navigating
+        }
+      }, 3000);
     });
 
     webview.addEventListener('did-fail-load', (e) => {
@@ -2285,6 +2324,19 @@
     async function initStoryboard() {
       try {
         const data = await window.sceneVisualizer.storyboardList();
+
+        // If we know the current story, find its associated board
+        if (currentStoryId) {
+          const storyBoard = data.storyboards.find(sb => sb.storyId === currentStoryId);
+          if (storyBoard) {
+            activeStoryboardId = storyBoard.id;
+            activeStoryboardName = storyBoard.name;
+            commitSbName.textContent = activeStoryboardName;
+            return;
+          }
+        }
+
+        // Fallback: use persisted active board
         activeStoryboardId = data.activeStoryboardId;
         const active = data.storyboards.find(sb => sb.id === activeStoryboardId);
         activeStoryboardName = active ? active.name : '';
@@ -2338,8 +2390,7 @@
           if (result.storyboardId && result.storyboardId !== activeStoryboardId) {
             activeStoryboardId = result.storyboardId;
           }
-          await initStoryboard();
-          // Refresh viewer if it's open
+          // Refresh viewer if it's open (don't call initStoryboard — it would clobber activeStoryboardId)
           if (storyboardModal.classList.contains('active')) {
             await refreshStoryboardSelect();
             await renderSceneList();
@@ -2403,7 +2454,7 @@
           opt.value = sb.id;
           const suffix = ` (${sb.sceneCount} scenes)`;
           opt.textContent = (showStoryTitle && sb.storyTitle) ? `${sb.name} — ${sb.storyTitle}${suffix}` : `${sb.name}${suffix}`;
-          if (sb.id === data.activeStoryboardId) opt.selected = true;
+          if (sb.id === activeStoryboardId) opt.selected = true;
           parent.appendChild(opt);
         }
       }
@@ -2435,7 +2486,11 @@
         addOptions(data.storyboards, storyboardSelect, false);
       }
 
-      activeStoryboardId = data.activeStoryboardId;
+      // Only fall back to disk value if in-memory ID is missing or invalid
+      const inMemoryValid = activeStoryboardId && data.storyboards.find(sb => sb.id === activeStoryboardId);
+      if (!inMemoryValid) {
+        activeStoryboardId = data.activeStoryboardId;
+      }
       const active = data.storyboards.find(sb => sb.id === activeStoryboardId);
       activeStoryboardName = active ? active.name : '';
       commitSbName.textContent = activeStoryboardName || 'Default';

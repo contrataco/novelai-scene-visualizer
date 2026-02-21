@@ -4,7 +4,7 @@
  * Automatically generates images representing the current story scene.
  * Works in conjunction with the Scene Visualizer Electron app.
  *
- * @version 1.1.0
+ * @version 1.2.0
  * @author ryanrobson
  */
 
@@ -108,6 +108,26 @@ async function saveStorage(data: ScriptStorage): Promise<void> {
 // ============================================================================
 // PROMPT STORAGE (for Electron to read)
 // ============================================================================
+
+// Broadcast story context to Electron via DOM element (the contextBridge is
+// inaccessible from NovelAI's script sandbox, so we use DOM data attributes
+// that the webview-preload MutationObserver can detect and relay via IPC).
+function broadcastStoryContext(): void {
+  if (!currentStoryId) return;
+  try {
+    let el = document.getElementById('scene-vis-story-context');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'scene-vis-story-context';
+      el.style.display = 'none';
+      document.body.appendChild(el);
+    }
+    el.dataset.storyId = currentStoryId;
+    el.dataset.storyTitle = currentStoryTitle || '';
+  } catch (e) {
+    // DOM not available
+  }
+}
 
 // Store the latest prompt in a global location that Electron can access
 // The prompt is also displayed in the UI panel for visibility
@@ -611,6 +631,24 @@ async function processNewContent(): Promise<void> {
 
   const storage = await getStorage();
   if (!storage.settings.autoGenerate) return;
+
+  // Re-detect story ID to handle story switches between generations
+  try {
+    if ((api.v1 as any).story?.id) {
+      const id = await (api.v1 as any).story.id();
+      if (id && String(id) !== currentStoryId) {
+        currentStoryId = String(id);
+        api.v1.log(`[SceneVis] Story changed to: ${currentStoryId}`);
+      }
+    }
+    if ((api.v1 as any).story?.title?.get) {
+      const title = await (api.v1 as any).story.title.get();
+      if (title) currentStoryTitle = String(title);
+    }
+    broadcastStoryContext();
+  } catch (e) {
+    // Non-fatal — continue with existing story context
+  }
 
   isProcessing = true;
 
@@ -1118,10 +1156,8 @@ async function initialize(): Promise<void> {
         }
       }
 
-      // Send story context to Electron
-      if (currentStoryId && (globalThis as any).__sceneVisualizerBridge?.updateStoryContext) {
-        (globalThis as any).__sceneVisualizerBridge.updateStoryContext(currentStoryId, currentStoryTitle || '');
-      }
+      // Send story context to Electron via DOM
+      broadcastStoryContext();
     } catch (e) {
       api.v1.log('[SceneVis] Could not extract story identity (non-fatal):' + e);
     }

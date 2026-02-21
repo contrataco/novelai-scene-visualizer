@@ -142,4 +142,19 @@ window.addEventListener('DOMContentLoaded', () => {
     // Small delay to let the page render
     setTimeout(attemptAutoLogin, 1500);
   }
+
+  // Watch for story context from companion script via DOM data attributes.
+  // The script sandbox can't access contextBridge APIs, so it writes to a
+  // hidden DOM element instead. We observe mutations and relay via IPC.
+  const observer = new MutationObserver(() => {
+    const el = document.getElementById('scene-vis-story-context');
+    if (!el) return;
+    const storyId = el.dataset.storyId;
+    const storyTitle = el.dataset.storyTitle || '';
+    if (storyId) {
+      console.log('[WebviewPreload] Story context from DOM:', storyId, storyTitle);
+      ipcRenderer.send('story-context-from-webview', { storyId, storyTitle });
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-story-id', 'data-story-title'] });
 });

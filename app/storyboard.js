@@ -46,9 +46,26 @@ function getIndexPath() {
   return path.join(getStoryboardsDir(), 'index.json');
 }
 
+function migrateIndex(data) {
+  // Migrate from v1 (no version field) to v2 (story associations)
+  if (!data.version) {
+    data.version = 2;
+    data.storyAssociations = {};
+    for (const entry of data.storyboards) {
+      if (!entry.storyId) entry.storyId = null;
+      if (!entry.storyTitle) entry.storyTitle = null;
+    }
+    console.log('[Storyboard] Migrated index to v2 (story associations)');
+  }
+  return data;
+}
+
 function readIndex() {
   const data = readJSON(getIndexPath());
-  return data || { activeStoryboardId: null, storyboards: [] };
+  if (!data) return { version: 2, activeStoryboardId: null, storyAssociations: {}, storyboards: [] };
+  const migrated = migrateIndex(data);
+  if (!migrated.storyAssociations) migrated.storyAssociations = {};
+  return migrated;
 }
 
 function writeIndex(index) {
@@ -62,7 +79,7 @@ function list() {
   return { activeStoryboardId: index.activeStoryboardId, storyboards: index.storyboards };
 }
 
-function create(name) {
+function create(name, storyId = null, storyTitle = null) {
   const id = 'sb_' + Date.now();
   const sbDir = path.join(getStoryboardsDir(), id);
   ensureDir(path.join(sbDir, 'images'));
@@ -71,13 +88,16 @@ function create(name) {
   writeJSON(path.join(sbDir, 'storyboard.json'), storyboard);
 
   const index = readIndex();
-  index.storyboards.push({ id, name, sceneCount: 0, updatedAt: storyboard.updatedAt });
+  index.storyboards.push({ id, name, sceneCount: 0, updatedAt: storyboard.updatedAt, storyId, storyTitle });
+  if (storyId) {
+    index.storyAssociations[storyId] = id;
+  }
   if (!index.activeStoryboardId) {
     index.activeStoryboardId = id;
   }
   writeIndex(index);
 
-  return { id, name };
+  return { id, name, storyId, storyTitle };
 }
 
 function deleteStoryboard(storyboardId) {
@@ -87,6 +107,12 @@ function deleteStoryboard(storyboardId) {
   }
 
   const index = readIndex();
+  // Clean up story association
+  for (const [sid, sbId] of Object.entries(index.storyAssociations)) {
+    if (sbId === storyboardId) {
+      delete index.storyAssociations[sid];
+    }
+  }
   index.storyboards = index.storyboards.filter(sb => sb.id !== storyboardId);
   if (index.activeStoryboardId === storyboardId) {
     index.activeStoryboardId = index.storyboards.length > 0 ? index.storyboards[0].id : null;
@@ -276,6 +302,71 @@ function getSceneImage(storyboardId, sceneId) {
   return 'data:image/png;base64,' + data.toString('base64');
 }
 
+// --- Story Association ---
+
+function getOrCreateForStory(storyId, storyTitle) {
+  const index = readIndex();
+
+  // Check if this story already has an associated storyboard
+  const existingId = index.storyAssociations[storyId];
+  if (existingId) {
+    const entry = index.storyboards.find(sb => sb.id === existingId);
+    if (entry) {
+      // Update title if changed
+      if (storyTitle && entry.storyTitle !== storyTitle) {
+        entry.storyTitle = storyTitle;
+        entry.name = storyTitle;
+        // Also update the storyboard.json name
+        const sbPath = path.join(getStoryboardsDir(), existingId, 'storyboard.json');
+        const sb = readJSON(sbPath);
+        if (sb) {
+          sb.name = storyTitle;
+          writeJSON(sbPath, sb);
+        }
+        writeIndex(index);
+      }
+      return { id: entry.id, name: entry.name, storyId: entry.storyId, storyTitle: entry.storyTitle, created: false };
+    }
+    // Association exists but storyboard is missing — remove stale association
+    delete index.storyAssociations[storyId];
+    writeIndex(index);
+  }
+
+  // Create a new storyboard for this story
+  const name = storyTitle || 'Story ' + storyId.slice(0, 8);
+  const result = create(name, storyId, storyTitle);
+  return { ...result, created: true };
+}
+
+function associateWithStory(storyboardId, storyId, storyTitle) {
+  const index = readIndex();
+  const entry = index.storyboards.find(sb => sb.id === storyboardId);
+  if (!entry) return { success: false, error: 'Storyboard not found' };
+
+  entry.storyId = storyId;
+  entry.storyTitle = storyTitle || null;
+  index.storyAssociations[storyId] = storyboardId;
+  writeIndex(index);
+
+  return { success: true };
+}
+
+function dissociateFromStory(storyboardId) {
+  const index = readIndex();
+  const entry = index.storyboards.find(sb => sb.id === storyboardId);
+  if (!entry) return { success: false, error: 'Storyboard not found' };
+
+  // Remove from associations map
+  if (entry.storyId && index.storyAssociations[entry.storyId] === storyboardId) {
+    delete index.storyAssociations[entry.storyId];
+  }
+  entry.storyId = null;
+  entry.storyTitle = null;
+  writeIndex(index);
+
+  return { success: true };
+}
+
 module.exports = {
   list,
   create,
@@ -288,4 +379,7 @@ module.exports = {
   reorderScenes,
   updateSceneNote,
   getSceneImage,
+  getOrCreateForStory,
+  associateWithStory,
+  dissociateFromStory,
 };

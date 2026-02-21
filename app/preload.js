@@ -69,6 +69,9 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   storyboardReorderScenes: (storyboardId, sceneIds) => ipcRenderer.invoke('storyboard:reorder-scenes', { storyboardId, sceneIds }),
   storyboardUpdateSceneNote: (storyboardId, sceneId, note) => ipcRenderer.invoke('storyboard:update-scene-note', { storyboardId, sceneId, note }),
   storyboardGetSceneImage: (storyboardId, sceneId) => ipcRenderer.invoke('storyboard:get-scene-image', { storyboardId, sceneId }),
+  storyboardGetOrCreateForStory: (storyId, storyTitle) => ipcRenderer.invoke('storyboard:get-or-create-for-story', { storyId, storyTitle }),
+  storyboardAssociateWithStory: (storyboardId, storyId, storyTitle) => ipcRenderer.invoke('storyboard:associate-with-story', { storyboardId, storyId, storyTitle }),
+  storyboardDissociateFromStory: (storyboardId) => ipcRenderer.invoke('storyboard:dissociate-from-story', { storyboardId }),
 
   // Event listeners
   onPromptUpdate: (callback) => {
@@ -82,5 +85,8 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   },
   onSuggestionsUpdate: (callback) => {
     ipcRenderer.on('suggestions-update', (event, data) => callback(data));
+  },
+  onStoryContextUpdate: (callback) => {
+    ipcRenderer.on('story-context-update', (event, data) => callback(data));
   },
 });
