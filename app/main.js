@@ -372,9 +372,13 @@ ipcMain.handle('get-pollo-login-status', async () => {
   return { loggedIn: await polloProvider.checkLoginStatus() };
 });
 
-ipcMain.handle('pollo-login', async () => {
-  const result = await polloProvider.openLoginWindow();
-  return { success: result };
+ipcMain.handle('pollo-login', () => {
+  polloProvider.openLoginInBrowser();
+  return { success: true };
+});
+
+ipcMain.handle('pollo-extract-session', async () => {
+  return polloProvider.extractAndImportSession();
 });
 
 // IPC Handlers — API token (unchanged)

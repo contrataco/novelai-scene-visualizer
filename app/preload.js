@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   getPolloModels: () => ipcRenderer.invoke('get-pollo-models'),
   getPolloLoginStatus: () => ipcRenderer.invoke('get-pollo-login-status'),
   polloLogin: () => ipcRenderer.invoke('pollo-login'),
+  polloExtractSession: () => ipcRenderer.invoke('pollo-extract-session'),
 
   // Token status
   getTokenStatus: () => ipcRenderer.invoke('get-token-status'),

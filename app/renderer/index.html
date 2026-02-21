@@ -1024,8 +1024,14 @@
           <span class="dot inactive" id="polloLoginDot"></span>
           <span id="polloLoginText">Not logged in</span>
         </div>
-        <button class="key-extract-btn" id="polloLoginBtn">Login to Pollo AI</button>
-        <div class="form-group" style="margin-top: 12px;">
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <button class="key-extract-btn" id="polloLoginBtn">Open Browser to Login</button>
+          <button class="key-extract-btn" id="polloExtractBtn">Extract Session</button>
+        </div>
+        <div style="font-size:11px;color:#666;margin-bottom:12px;">
+          Click "Open Browser" to log in with Google/passkey in your browser, then click "Extract Session" to import your login automatically.
+        </div>
+        <div class="form-group">
           <label>Model</label>
           <select id="polloModel"></select>
         </div>
@@ -1263,6 +1269,7 @@
     const polloLoginDot = document.getElementById('polloLoginDot');
     const polloLoginText = document.getElementById('polloLoginText');
     const polloLoginBtn = document.getElementById('polloLoginBtn');
+    const polloExtractBtn = document.getElementById('polloExtractBtn');
     const polloModelSelect = document.getElementById('polloModel');
     const polloAspectRatioSelect = document.getElementById('polloAspectRatio');
 
@@ -1426,27 +1433,41 @@
       }
     });
 
-    // Pollo AI login button
+    // Pollo AI — open system browser for login
     polloLoginBtn.addEventListener('click', async () => {
-      polloLoginBtn.disabled = true;
-      polloLoginBtn.textContent = 'Opening login window...';
-      polloLoginText.textContent = 'Login window opened — please log in';
+      await window.sceneVisualizer.polloLogin();
+      polloLoginText.textContent = 'Browser opened — log in, then click "Extract Session"';
+    });
+
+    // Pollo AI — extract session from browser cookie store
+    polloExtractBtn.addEventListener('click', async () => {
+      polloExtractBtn.disabled = true;
+      polloExtractBtn.textContent = 'Extracting...';
+      polloLoginText.textContent = 'Reading browser cookies...';
       try {
-        const result = await window.sceneVisualizer.polloLogin();
+        const result = await window.sceneVisualizer.polloExtractSession();
         if (result.success) {
           polloLoginDot.className = 'dot active';
-          polloLoginText.textContent = 'Logged in';
-          await loadPolloModels();
+          polloLoginText.textContent = `Session imported from ${result.browser} (${result.cookieCount} cookies) — verifying...`;
+          // Verify by loading models
+          const models = await window.sceneVisualizer.getPolloModels();
+          if (models.length > 0) {
+            polloLoginText.textContent = `Logged in via ${result.browser} (${models.length} models available)`;
+            await loadPolloModels();
+          } else {
+            polloLoginText.textContent = 'Session imported but could not fetch models — session may have expired';
+            polloLoginDot.className = 'dot inactive';
+          }
         } else {
           polloLoginDot.className = 'dot inactive';
-          polloLoginText.textContent = 'Login cancelled or failed';
+          polloLoginText.textContent = result.error || 'Extraction failed';
         }
       } catch (e) {
         polloLoginDot.className = 'dot inactive';
         polloLoginText.textContent = 'Error: ' + e.message;
       } finally {
-        polloLoginBtn.disabled = false;
-        polloLoginBtn.textContent = 'Login to Pollo AI';
+        polloExtractBtn.disabled = false;
+        polloExtractBtn.textContent = 'Extract Session';
       }
     });
 
