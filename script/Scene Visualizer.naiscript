@@ -1,12 +1,14 @@
-/**
- * NovelAI Scene Visualizer Script
- *
- * Automatically generates images representing the current story scene.
- * Works in conjunction with the Scene Visualizer Electron app.
- *
- * @version 1.1.0
- * @author ryanrobson
- */
+/*---
+compatibilityVersion: naiscript-1.0
+id: e02be7b4-4993-4ebf-abc0-ca7ed996744f
+name: Scene Visualizer
+createdAt: 1766945065236
+updatedAt: 1771655623976
+version: 1.1.0
+author: Contrataco
+description: Requires scene viz app to work
+memoryLimit: 16
+---*/
 
 // ============================================================================
 // CONFIGURATION

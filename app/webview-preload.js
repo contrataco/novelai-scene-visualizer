@@ -8,20 +8,34 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('__sceneVisualizerBridge', {
   // Send prompt to sidebar (no image generation)
-  updatePrompt: (prompt, negativePrompt, storyExcerpt) => {
+  updatePrompt: (prompt, negativePrompt, storyExcerpt, storyId, storyTitle) => {
     console.log('[WebviewPreload] Sending prompt update via IPC');
-    ipcRenderer.send('prompt-from-webview', { prompt, negativePrompt: negativePrompt || '', storyExcerpt: storyExcerpt || '' });
+    ipcRenderer.send('prompt-from-webview', {
+      prompt,
+      negativePrompt: negativePrompt || '',
+      storyExcerpt: storyExcerpt || '',
+      storyId: storyId || null,
+      storyTitle: storyTitle || null,
+    });
   },
 
   // Send prompt and request auto-generation
-  requestImage: (prompt, negativePrompt, storyExcerpt) => {
+  requestImage: (prompt, negativePrompt, storyExcerpt, storyId, storyTitle) => {
     console.log('[WebviewPreload] Requesting image generation via IPC');
     ipcRenderer.send('prompt-from-webview', {
       prompt,
       negativePrompt: negativePrompt || '',
       storyExcerpt: storyExcerpt || '',
       autoGenerate: true,
+      storyId: storyId || null,
+      storyTitle: storyTitle || null,
     });
+  },
+
+  // Send story context update
+  updateStoryContext: (storyId, storyTitle) => {
+    console.log('[WebviewPreload] Sending story context via IPC:', storyId, storyTitle);
+    ipcRenderer.send('story-context-from-webview', { storyId, storyTitle: storyTitle || '' });
   },
 
   // Send story suggestions to sidebar
@@ -34,143 +48,6 @@ contextBridge.exposeInMainWorld('__sceneVisualizerBridge', {
 });
 
 console.log('[WebviewPreload] Scene Visualizer bridge ready (IPC mode)');
-
-// ========================================================================
-// SUGGESTION INSERTION — receives IPC from renderer, inserts into ProseMirror
-// ========================================================================
-ipcRenderer.on('insert-suggestion', (_event, data) => {
-  const text = data && data.text;
-  if (!text) {
-    ipcRenderer.sendToHost('suggestion-inserted', { success: false, error: 'No text provided' });
-    return;
-  }
-
-  console.log('[WebviewPreload] Received insert-suggestion request, text length:', text.length);
-
-  function findEditor() {
-    return document.querySelector('.ProseMirror[contenteditable="true"]');
-  }
-
-  function moveCursorToEnd(el) {
-    const sel = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    range.collapse(false);
-    sel.removeAllRanges();
-    sel.addRange(range);
-  }
-
-  // Strategy 1: ProseMirror EditorView transaction (most reliable)
-  // ProseMirror stores a ViewDesc on its DOM elements, giving direct access to the view.
-  function tryProseMirrorTransaction() {
-    const editor = findEditor();
-    if (!editor) return false;
-
-    try {
-      const view = editor.pmViewDesc && editor.pmViewDesc.view;
-      if (!view || !view.state) {
-        console.log('[WebviewPreload] pmViewDesc not found on editor element');
-        return false;
-      }
-
-      editor.focus();
-      const { state } = view;
-      // Insert text at end of document (before the closing node token)
-      const insertPos = state.doc.content.size - 1;
-      const tr = state.tr.insertText('\n' + text, insertPos);
-      view.dispatch(tr);
-      console.log('[WebviewPreload] ProseMirror transaction dispatched successfully');
-      return true;
-    } catch (e) {
-      console.warn('[WebviewPreload] ProseMirror transaction error:', e);
-      return false;
-    }
-  }
-
-  // Strategy 2: Synthetic paste with textContent verification
-  function tryPaste() {
-    const editor = findEditor();
-    if (!editor) return false;
-
-    try {
-      editor.focus();
-      moveCursorToEnd(editor);
-
-      const before = editor.textContent;
-
-      const dt = new DataTransfer();
-      dt.setData('text/plain', text);
-
-      const pasteEvent = new ClipboardEvent('paste', {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-      });
-      Object.defineProperty(pasteEvent, 'clipboardData', { value: dt });
-      editor.dispatchEvent(pasteEvent);
-
-      // Verify text was actually inserted by checking content change
-      const after = editor.textContent;
-      const success = after.length > before.length;
-      console.log('[WebviewPreload] Paste strategy — content changed:', success,
-        '(before:', before.length, 'after:', after.length, ')');
-      return success;
-    } catch (e) {
-      console.warn('[WebviewPreload] Paste strategy error:', e);
-      return false;
-    }
-  }
-
-  // Strategy 3: execCommand insertText with textContent verification (last resort)
-  function tryExecCommand() {
-    const editor = findEditor();
-    if (!editor) return false;
-
-    try {
-      editor.focus();
-      moveCursorToEnd(editor);
-
-      const before = editor.textContent;
-      document.execCommand('insertText', false, text);
-
-      const after = editor.textContent;
-      const success = after.length > before.length;
-      console.log('[WebviewPreload] execCommand insertText — content changed:', success,
-        '(before:', before.length, 'after:', after.length, ')');
-      return success;
-    } catch (e) {
-      console.warn('[WebviewPreload] execCommand insertText error:', e);
-      return false;
-    }
-  }
-
-  // Try strategies in order
-  const strategies = [
-    { fn: tryProseMirrorTransaction, name: 'prosemirror-transaction' },
-    { fn: tryPaste, name: 'paste-event' },
-    { fn: tryExecCommand, name: 'execCommand-insertText' },
-  ];
-
-  let result = { success: false, error: 'No suitable editor found' };
-
-  for (const strategy of strategies) {
-    try {
-      if (strategy.fn()) {
-        result = { success: true, method: strategy.name };
-        console.log('[WebviewPreload] Insertion succeeded via:', strategy.name);
-        break;
-      }
-    } catch (e) {
-      console.warn(`[WebviewPreload] Strategy ${strategy.name} threw:`, e);
-    }
-  }
-
-  if (!result.success && findEditor()) {
-    result.error = 'Editor found but all insertion strategies failed';
-  }
-
-  ipcRenderer.sendToHost('suggestion-inserted', result);
-});
 
 // Auto-login: detect login page and fill credentials
 async function attemptAutoLogin() {

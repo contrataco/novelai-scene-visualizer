@@ -636,6 +636,10 @@
       opacity: 1;
     }
 
+    .toast.warn {
+      background: #b8860b;
+    }
+
     /* Storyboard Viewer Modal */
     .storyboard-modal .modal-content {
       width: 850px;
@@ -803,6 +807,25 @@
       padding: 40px;
       color: #555;
     }
+
+    .story-indicator {
+      font-size: 11px;
+      color: #4d96ff;
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .commit-story-label {
+      font-size: 10px;
+      color: #4d96ff;
+      margin-bottom: 2px;
+    }
+
+    .sb-link-btn {
+      background: #0f3460;
+    }
   </style>
 </head>
 <body>
@@ -818,6 +841,7 @@
       <input type="checkbox" id="autoGenerateToggle" style="cursor:pointer;">
       Auto-generate
     </label>
+    <span class="story-indicator" id="storyIndicator" style="display:none;"></span>
     <span class="status" id="status">Initializing...</span>
   </div>
 
@@ -865,6 +889,7 @@
 
         <button id="commitBtn" class="commit-btn" disabled>Commit to Storyboard</button>
         <div id="commitConfirm" class="commit-confirm">
+          <div id="commitStoryLabel" class="commit-story-label" style="display:none;"></div>
           <label>Storyboard: <span id="commitSbName">Default</span></label>
           <label>Note (optional):</label>
           <input type="text" id="commitNoteInput" placeholder="Scene annotation...">
@@ -1188,6 +1213,7 @@
       <div class="storyboard-header">
         <select id="storyboardSelect"></select>
         <button class="sb-rename-btn" id="sbRenameBtn">Rename</button>
+        <button class="sb-link-btn" id="sbLinkBtn" style="display:none;">Link Story</button>
         <button class="sb-new-btn" id="sbNewBtn">New</button>
         <button class="sb-del-btn" id="sbDeleteBtn">Delete</button>
       </div>
@@ -1289,6 +1315,10 @@
     let currentStoryExcerpt = '';
     let isGenerating = false;
 
+    // Story state
+    let currentStoryId = null;
+    let currentStoryTitle = null;
+
     // Storyboard state
     let currentImageData = null;       // base64 of last generated image
     let currentGenerationMeta = null;  // { provider, model, resolution }
@@ -1310,6 +1340,9 @@
     const commitNoteInput = document.getElementById('commitNoteInput');
     const commitConfirmBtn = document.getElementById('commitConfirmBtn');
     const commitCancelBtn = document.getElementById('commitCancelBtn');
+    const commitStoryLabel = document.getElementById('commitStoryLabel');
+    const storyIndicator = document.getElementById('storyIndicator');
+    const sbLinkBtn = document.getElementById('sbLinkBtn');
     const toastEl = document.getElementById('toast');
 
     // Resolution presets
@@ -1614,20 +1647,6 @@
       console.error('Webview load failed:', e);
     });
 
-    // Listen for suggestion insertion results from webview preload
-    webview.addEventListener('ipc-message', (event) => {
-      if (event.channel === 'suggestion-inserted') {
-        const result = event.args[0];
-        if (result && result.success) {
-          console.log('[Renderer] Suggestion inserted via', result.method);
-          showSuggestionStatus('Suggestion inserted into editor', 'success');
-        } else {
-          console.warn('[Renderer] Suggestion insertion failed:', result?.error);
-          showSuggestionStatus(result?.error || 'Could not insert suggestion', 'error');
-        }
-      }
-    });
-
     // Generate Scene button
     generateBtn.addEventListener('click', async () => {
       if (isGenerating) return;
@@ -1691,10 +1710,23 @@
           commitBtn.disabled = false;
           status.textContent = 'Image ready';
           status.className = 'status connected';
+
+          // Notify user about retry/fallback
+          if (result.meta?.fallbackModel) {
+            showToast(`Generated with fallback model: ${result.meta.fallbackModel}`, 4000, 'warn');
+          } else if (result.meta?.retried) {
+            showToast('Image generated after retry', 2500);
+          }
         } else {
-          status.textContent = 'Generation failed: ' + result.error;
+          if (result.blankDetected) {
+            status.textContent = 'Image appears blank — generation may have been filtered';
+          } else if (result.contentRestricted) {
+            status.textContent = 'Content restricted — try a different prompt';
+          } else {
+            status.textContent = 'Generation failed: ' + result.error;
+          }
           status.className = 'status error';
-          console.error('Generation failed:', result.error);
+          console.error('Generation failed:', result.error || 'blank image');
         }
       } catch (e) {
         status.textContent = 'Error: ' + e.message;
@@ -1971,6 +2003,11 @@
       currentStoryExcerpt = data.storyExcerpt || '';
       promptDisplay.textContent = currentPrompt;
 
+      // Handle story context if included in prompt update
+      if (data.storyId) {
+        handleStoryContextChange(data.storyId, data.storyTitle);
+      }
+
       // Show the image panel if hidden
       imagePanel.classList.remove('hidden');
 
@@ -2068,16 +2105,84 @@
     }
 
     /**
-     * Insert suggestion text into NovelAI's ProseMirror editor via webview IPC.
-     * Sends text to webview-preload.js which uses ProseMirror-compatible strategies
-     * (synthetic paste, beforeinput, clipboard paste) instead of execCommand('insertText')
-     * which ProseMirror ignores.
+     * Insert suggestion text into NovelAI's story editor via executeJavaScript.
+     * Prefers the companion script's document.append API (updates NovelAI's own
+     * document model). Falls back to direct ProseMirror manipulation if the
+     * companion script isn't running.
      */
-    function insertSuggestionIntoEditor(suggestion) {
+    async function insertSuggestionIntoEditor(suggestion) {
       try {
-        webview.send('insert-suggestion', { text: suggestion.text });
+        const text = suggestion.text;
+        const result = await webview.executeJavaScript(`
+          (async function() {
+            // Strategy 1: Use companion script's API (most reliable — updates NovelAI's document model)
+            if (window.__sceneVisInsert) {
+              try {
+                const ok = await window.__sceneVisInsert(${JSON.stringify(text)});
+                if (ok) return { success: true, method: 'document-append' };
+              } catch (e) {
+                console.warn('[SceneVis] __sceneVisInsert threw:', e);
+              }
+            }
+
+            // Strategy 2: Direct ProseMirror transaction (fallback if companion script not running)
+            const editor = document.querySelector('.ProseMirror[contenteditable="true"]');
+            if (!editor) return { success: false, error: 'No editor found' };
+
+            const before = editor.textContent.length;
+
+            try {
+              const view = editor.pmViewDesc && editor.pmViewDesc.view;
+              if (view && view.state) {
+                editor.focus();
+                const { state } = view;
+                // Find the last textblock and insert at its end
+                let insertPos = null;
+                state.doc.descendants((node, pos) => {
+                  if (node.isTextblock) {
+                    insertPos = pos + 1 + node.content.size;
+                  }
+                });
+                if (insertPos !== null) {
+                  const tr = state.tr.insertText('\\n' + ${JSON.stringify(text)}, insertPos);
+                  view.dispatch(tr);
+                  if (editor.textContent.length > before) {
+                    return { success: true, method: 'prosemirror-transaction' };
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn('[SceneVis] ProseMirror transaction error:', e);
+            }
+
+            // Strategy 3: execCommand fallback
+            try {
+              editor.focus();
+              const sel = window.getSelection();
+              const range = document.createRange();
+              range.selectNodeContents(editor);
+              range.collapse(false);
+              sel.removeAllRanges();
+              sel.addRange(range);
+              document.execCommand('insertText', false, ${JSON.stringify(text)});
+              if (editor.textContent.length > before) {
+                return { success: true, method: 'execCommand' };
+              }
+            } catch (e) {}
+
+            return { success: false, error: 'All insertion strategies failed' };
+          })()
+        `);
+
+        if (result && result.success) {
+          console.log('[Renderer] Suggestion inserted via', result.method);
+          showSuggestionStatus('Suggestion inserted into editor', 'success');
+        } else {
+          console.warn('[Renderer] Suggestion insertion failed:', result?.error);
+          showSuggestionStatus(result?.error || 'Could not insert suggestion', 'error');
+        }
       } catch (e) {
-        console.error('[Renderer] Error sending insert-suggestion IPC:', e);
+        console.error('[Renderer] Error inserting suggestion:', e);
         showSuggestionStatus('Error inserting suggestion', 'error');
       }
     }
@@ -2118,13 +2223,62 @@
     });
 
     // ========================================================================
+    // STORY CONTEXT — auto-switch storyboards per story
+    // ========================================================================
+
+    async function handleStoryContextChange(storyId, storyTitle) {
+      if (!storyId || storyId === currentStoryId) return;
+
+      currentStoryId = storyId;
+      currentStoryTitle = storyTitle || null;
+
+      // Update toolbar indicator
+      if (storyTitle) {
+        storyIndicator.textContent = 'Story: ' + storyTitle;
+        storyIndicator.style.display = '';
+      } else {
+        storyIndicator.textContent = 'Story: ' + storyId.slice(0, 12);
+        storyIndicator.style.display = '';
+      }
+
+      // Auto-switch storyboard
+      try {
+        const result = await window.sceneVisualizer.storyboardGetOrCreateForStory(storyId, storyTitle);
+        if (result && result.id) {
+          activeStoryboardId = result.id;
+          activeStoryboardName = result.name;
+          await window.sceneVisualizer.storyboardSetActive(result.id);
+          commitSbName.textContent = activeStoryboardName;
+          if (result.created) {
+            showToast('Storyboard created for story: ' + (storyTitle || storyId.slice(0, 12)));
+          } else {
+            console.log('[Renderer] Switched to storyboard:', activeStoryboardName);
+          }
+          // Update commit story label
+          if (storyTitle) {
+            commitStoryLabel.textContent = 'Story: ' + storyTitle;
+            commitStoryLabel.style.display = '';
+          }
+        }
+      } catch (e) {
+        console.error('[Renderer] Error auto-switching storyboard:', e);
+      }
+    }
+
+    // Listen for story context updates from webview
+    window.sceneVisualizer.onStoryContextUpdate((data) => {
+      console.log('[Renderer] Story context update:', data);
+      handleStoryContextChange(data.storyId, data.storyTitle);
+    });
+
+    // ========================================================================
     // STORYBOARD
     // ========================================================================
 
-    function showToast(msg, duration = 2500) {
+    function showToast(msg, duration = 2500, variant = '') {
       toastEl.textContent = msg;
-      toastEl.classList.add('show');
-      setTimeout(() => toastEl.classList.remove('show'), duration);
+      toastEl.className = 'toast show' + (variant ? ' ' + variant : '');
+      setTimeout(() => { toastEl.className = 'toast'; }, duration);
     }
 
     // Init storyboard state on load
@@ -2144,6 +2298,12 @@
     // Commit button flow
     commitBtn.addEventListener('click', () => {
       commitSbName.textContent = activeStoryboardName || 'Default';
+      if (currentStoryTitle) {
+        commitStoryLabel.textContent = 'Story: ' + currentStoryTitle;
+        commitStoryLabel.style.display = '';
+      } else {
+        commitStoryLabel.style.display = 'none';
+      }
       commitNoteInput.value = '';
       commitConfirm.classList.add('active');
     });
@@ -2177,7 +2337,12 @@
           // Update active storyboard ID if it was auto-created
           if (result.storyboardId && result.storyboardId !== activeStoryboardId) {
             activeStoryboardId = result.storyboardId;
-            await initStoryboard();
+          }
+          await initStoryboard();
+          // Refresh viewer if it's open
+          if (storyboardModal.classList.contains('active')) {
+            await refreshStoryboardSelect();
+            await renderSceneList();
           }
           showToast('Scene committed to storyboard');
           commitConfirm.classList.remove('active');
@@ -2213,21 +2378,80 @@
         storyboardSelect.appendChild(opt);
         activeStoryboardId = null;
         activeStoryboardName = '';
+        sbLinkBtn.style.display = 'none';
         return;
       }
 
+      // Group storyboards: Current Story, Other Stories, Unlinked
+      const currentStoryGroup = [];
+      const otherStoryGroup = [];
+      const unlinkedGroup = [];
+
       for (const sb of data.storyboards) {
-        const opt = document.createElement('option');
-        opt.value = sb.id;
-        opt.textContent = `${sb.name} (${sb.sceneCount} scenes)`;
-        if (sb.id === data.activeStoryboardId) opt.selected = true;
-        storyboardSelect.appendChild(opt);
+        if (sb.storyId && sb.storyId === currentStoryId) {
+          currentStoryGroup.push(sb);
+        } else if (sb.storyId) {
+          otherStoryGroup.push(sb);
+        } else {
+          unlinkedGroup.push(sb);
+        }
+      }
+
+      function addOptions(group, parent, showStoryTitle) {
+        for (const sb of group) {
+          const opt = document.createElement('option');
+          opt.value = sb.id;
+          const suffix = ` (${sb.sceneCount} scenes)`;
+          opt.textContent = (showStoryTitle && sb.storyTitle) ? `${sb.name} — ${sb.storyTitle}${suffix}` : `${sb.name}${suffix}`;
+          if (sb.id === data.activeStoryboardId) opt.selected = true;
+          parent.appendChild(opt);
+        }
+      }
+
+      const nonEmptyGroups = [currentStoryGroup, otherStoryGroup, unlinkedGroup].filter(g => g.length > 0).length;
+      const hasGroups = nonEmptyGroups > 1;
+
+      if (hasGroups) {
+        if (currentStoryGroup.length > 0) {
+          const grp = document.createElement('optgroup');
+          grp.label = 'Current Story';
+          addOptions(currentStoryGroup, grp, false);
+          storyboardSelect.appendChild(grp);
+        }
+        if (unlinkedGroup.length > 0) {
+          const grp = document.createElement('optgroup');
+          grp.label = 'Unlinked';
+          addOptions(unlinkedGroup, grp, false);
+          storyboardSelect.appendChild(grp);
+        }
+        if (otherStoryGroup.length > 0) {
+          const grp = document.createElement('optgroup');
+          grp.label = 'Other Stories';
+          addOptions(otherStoryGroup, grp, true);
+          storyboardSelect.appendChild(grp);
+        }
+      } else {
+        // No grouping needed — flat list
+        addOptions(data.storyboards, storyboardSelect, false);
       }
 
       activeStoryboardId = data.activeStoryboardId;
       const active = data.storyboards.find(sb => sb.id === activeStoryboardId);
       activeStoryboardName = active ? active.name : '';
       commitSbName.textContent = activeStoryboardName || 'Default';
+
+      // Show/hide link button based on whether active storyboard is linked and story is detected
+      if (active && currentStoryId) {
+        if (active.storyId) {
+          sbLinkBtn.textContent = 'Unlink';
+          sbLinkBtn.style.display = '';
+        } else {
+          sbLinkBtn.textContent = 'Link Story';
+          sbLinkBtn.style.display = '';
+        }
+      } else {
+        sbLinkBtn.style.display = 'none';
+      }
     }
 
     storyboardSelect.addEventListener('change', async () => {
@@ -2235,17 +2459,25 @@
       if (id) {
         await window.sceneVisualizer.storyboardSetActive(id);
         activeStoryboardId = id;
-        const opt = storyboardSelect.options[storyboardSelect.selectedIndex];
-        activeStoryboardName = opt.textContent.replace(/\s*\(\d+ scenes\)$/, '');
+        // Look up name from data, not display text
+        const data = await window.sceneVisualizer.storyboardList();
+        const found = data.storyboards.find(sb => sb.id === id);
+        activeStoryboardName = found ? found.name : '';
         commitSbName.textContent = activeStoryboardName;
         await renderSceneList();
+        await refreshStoryboardSelect(); // Refresh link button state
       }
     });
 
     sbNewBtn.addEventListener('click', async () => {
-      const name = prompt('Storyboard name:');
+      const defaultName = currentStoryTitle || '';
+      const name = prompt('Storyboard name:', defaultName);
       if (!name || !name.trim()) return;
       const result = await window.sceneVisualizer.storyboardCreate(name.trim());
+      // Pre-link to current story if detected
+      if (currentStoryId) {
+        await window.sceneVisualizer.storyboardAssociateWithStory(result.id, currentStoryId, currentStoryTitle || '');
+      }
       await window.sceneVisualizer.storyboardSetActive(result.id);
       activeStoryboardId = result.id;
       activeStoryboardName = result.name;
@@ -2270,6 +2502,23 @@
       await window.sceneVisualizer.storyboardRename(activeStoryboardId, name.trim());
       activeStoryboardName = name.trim();
       commitSbName.textContent = activeStoryboardName;
+      await refreshStoryboardSelect();
+    });
+
+    sbLinkBtn.addEventListener('click', async () => {
+      if (!activeStoryboardId || !currentStoryId) return;
+      const data = await window.sceneVisualizer.storyboardList();
+      const active = data.storyboards.find(sb => sb.id === activeStoryboardId);
+
+      if (active && active.storyId) {
+        // Unlink
+        await window.sceneVisualizer.storyboardDissociateFromStory(activeStoryboardId);
+        showToast('Storyboard unlinked from story');
+      } else {
+        // Link
+        await window.sceneVisualizer.storyboardAssociateWithStory(activeStoryboardId, currentStoryId, currentStoryTitle || '');
+        showToast('Storyboard linked to: ' + (currentStoryTitle || currentStoryId.slice(0, 12)));
+      }
       await refreshStoryboardSelect();
     });
 
