@@ -45,7 +45,7 @@ const store = new Store({
       type: 'object',
       default: {
         // Model selection
-        model: 'nai-diffusion-4-curated-preview',
+        model: 'nai-diffusion-4-5-full',
         // Dimensions
         width: 832,
         height: 1216,
@@ -53,7 +53,7 @@ const store = new Store({
         steps: 28,
         scale: 5,
         sampler: 'k_euler',
-        noiseSchedule: 'karras',
+        noiseSchedule: 'native',
         // SMEA (only for V3 models)
         smea: false,
         smeaDyn: false,
@@ -277,6 +277,31 @@ function isContentRestrictionError(errorMessage) {
 // ---------------------------------------------------------------------------
 
 async function tryModelFallback(provider, providerId, prompt, negativePrompt) {
+  // NovelAI model fallback via provider's fallback chain
+  if (providerId === 'novelai' && typeof provider.getModelFallbackOrder === 'function') {
+    const settings = store.get('imageSettings');
+    const currentModel = settings.model || 'nai-diffusion-4-5-full';
+    const fallbacks = provider.getModelFallbackOrder(currentModel);
+
+    for (const fallbackModel of fallbacks) {
+      console.log(`[Main] NovelAI fallback: trying ${fallbackModel} (was: ${currentModel})`);
+      store.set('imageSettings', { ...settings, model: fallbackModel });
+      try {
+        const imageData = await provider.generate(prompt, negativePrompt, store);
+        if (!isBlankImage(imageData)) {
+          return { imageData, fallbackModel };
+        }
+        console.log(`[Main] Fallback ${fallbackModel} returned blank image`);
+      } catch (e) {
+        console.log(`[Main] Fallback ${fallbackModel} failed: ${e.message}`);
+      } finally {
+        store.set('imageSettings', settings);
+      }
+    }
+    return null;
+  }
+
+  // Venice / Pollo model fallback
   const modelStoreKey = { venice: 'veniceModel', pollo: 'polloModel' }[providerId];
   if (!modelStoreKey) return null;
 

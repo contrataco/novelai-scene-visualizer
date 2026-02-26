@@ -83,8 +83,8 @@ const QUALITY_PRESETS = {
   'nai-diffusion-furry-3': ', {best quality}, {amazing quality}',
   'nai-diffusion-4-curated-preview': ', rating:general, best quality, very aesthetic, absurdres',
   'nai-diffusion-4-full': ', no text, best quality, very aesthetic, absurdres',
-  'nai-diffusion-4-5-curated': ', very aesthetic, masterpiece, no text, rating:general',
-  'nai-diffusion-4-5-full': ', very aesthetic, masterpiece, no text',
+  'nai-diffusion-4-5-curated': ', location, very aesthetic, masterpiece, no text, rating:general',
+  'nai-diffusion-4-5-full': ', location, very aesthetic, masterpiece, no text',
 };
 
 // Negative prompt presets
@@ -145,7 +145,7 @@ module.exports = {
     }
 
     const settings = store.get('imageSettings');
-    const model = settings.model || 'nai-diffusion-4-curated-preview';
+    const model = settings.model || 'nai-diffusion-4-5-full';
     const modelConfig = MODEL_CONFIG[model] || { isV4: true };
     const seed = Math.floor(Math.random() * 4294967295);
 
@@ -182,43 +182,51 @@ module.exports = {
         seed: seed,
         negative_prompt: finalNegative,
         cfg_rescale: settings.cfgRescale || 0,
-        noise_schedule: settings.noiseSchedule || 'karras',
+        noise_schedule: settings.noiseSchedule || 'native',
       }
     };
 
     // Add model-specific parameters
     if (modelConfig.isV4) {
-      Object.assign(requestBody.parameters, {
-        params_version: 3,
+      const noiseSchedule = settings.noiseSchedule || 'native';
+      const v4Params = {
+        params_version: 1,
         legacy: false,
         legacy_uc: false,
         legacy_v3_extend: false,
-        controlnet_strength: 1,
-        dynamic_thresholding: true,
-        skip_cfg_above_sigma: null,
+        dynamic_thresholding: false,
         qualityToggle: settings.qualityTags,
         sm: false,
         sm_dyn: false,
         autoSmea: false,
         use_coords: false,
-        prefer_brownian: true,
-        deliberate_euler_ancestral_bug: false,
+        uncond_scale: 1.0,
+        extra_noise_seed: seed,
         v4_prompt: {
           use_coords: false,
-          use_order: true,
+          use_order: false,
           caption: {
             base_caption: finalPrompt,
             char_captions: []
           }
         },
         v4_negative_prompt: {
-          legacy_uc: false,
+          use_coords: false,
+          use_order: false,
           caption: {
             base_caption: finalNegative,
             char_captions: []
           }
         }
-      });
+      };
+
+      // Only add euler ancestral params when using that sampler with non-native schedule
+      if (settings.sampler === 'k_euler_ancestral' && noiseSchedule !== 'native') {
+        v4Params.deliberate_euler_ancestral_bug = false;
+        v4Params.prefer_brownian = true;
+      }
+
+      Object.assign(requestBody.parameters, v4Params);
     } else {
       Object.assign(requestBody.parameters, {
         legacy: false,
@@ -265,5 +273,16 @@ module.exports = {
 
     console.log('[NovelAI] Image generated successfully');
     return `data:${mimeType};base64,${base64}`;
+  },
+
+  getModelFallbackOrder(currentModel) {
+    const chain = [
+      'nai-diffusion-4-5-full',
+      'nai-diffusion-4-5-curated',
+      'nai-diffusion-4-full',
+      'nai-diffusion-4-curated-preview',
+      'nai-diffusion-3',
+    ];
+    return chain.filter(m => m !== currentModel);
   }
 };
