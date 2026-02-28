@@ -29,6 +29,7 @@
       gap: 12px;
       border-bottom: 1px solid #0f3460;
       flex-shrink: 0;
+      position: relative;
     }
 
     .toolbar h1 {
@@ -114,7 +115,7 @@
     }
 
     .image-panel-header {
-      padding: 12px;
+      padding: 0 12px;
       border-bottom: 1px solid #0f3460;
       display: flex;
       align-items: center;
@@ -126,12 +127,631 @@
       color: #e94560;
     }
 
-    .image-panel-header button {
+    .image-panel-header button.close-btn {
       background: transparent;
       border: none;
       color: #888;
       cursor: pointer;
       font-size: 18px;
+    }
+
+    /* Panel Tab Bar */
+    .panel-tabs {
+      display: flex;
+      gap: 0;
+      flex: 1;
+    }
+
+    .panel-tab {
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #888;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      border-bottom: 2px solid transparent;
+      transition: color 0.2s, border-color 0.2s;
+    }
+
+    .panel-tab:hover {
+      color: #ccc;
+    }
+
+    .panel-tab.active {
+      color: #e94560;
+      border-bottom-color: #e94560;
+    }
+
+    /* Lore Panel */
+    .lore-panel-content {
+      flex: 1;
+      padding: 12px;
+      overflow-y: auto;
+      display: none;
+    }
+
+    .lore-panel-content.active {
+      display: block;
+    }
+
+    .image-panel-content.active {
+      display: block;
+    }
+
+    .lore-action-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .lore-action-bar button {
+      flex: 1;
+      padding: 6px 8px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: 1px solid #1a4a7a;
+      background: #0f3460;
+      color: #aaa;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .lore-action-bar button:hover {
+      background: #e94560;
+      color: #fff;
+    }
+
+    .lore-action-bar button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .lore-action-bar button:disabled:hover {
+      background: #0f3460;
+      color: #aaa;
+    }
+
+    .scan-dropdown {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: #16213e;
+      border: 1px solid #1a4a7a;
+      border-radius: 4px;
+      z-index: 100;
+      padding: 2px 0;
+      margin-top: 2px;
+    }
+
+    .scan-dropdown button {
+      display: block;
+      width: 100%;
+      padding: 5px 10px;
+      font-size: 11px;
+      border: none;
+      background: transparent;
+      color: #bbb;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .scan-dropdown button:hover {
+      background: #e94560;
+      color: #fff;
+    }
+
+    .lore-section {
+      margin-bottom: 12px;
+    }
+
+    .lore-section summary {
+      font-size: 12px;
+      font-weight: 600;
+      color: #ccc;
+      cursor: pointer;
+      padding: 6px 0;
+      user-select: none;
+    }
+
+    .lore-section summary .count {
+      color: #888;
+      font-weight: normal;
+    }
+
+    /* Lore Entry Cards */
+    .lore-card {
+      background: #0f3460;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 8px;
+      border-left: 3px solid #888;
+    }
+
+    .lore-card.character { border-left-color: #4d96ff; }
+    .lore-card.location { border-left-color: #6bcb77; }
+    .lore-card.item { border-left-color: #ffd93d; }
+    .lore-card.faction { border-left-color: #ff6b6b; }
+    .lore-card.concept { border-left-color: #a855f7; }
+
+    .lore-card-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+
+    .lore-card-header .category-badge {
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 3px;
+      color: #fff;
+    }
+    .lore-card-header .category-badge.editable {
+      cursor: pointer;
+      user-select: none;
+    }
+    .lore-card-header .category-badge.editable:hover {
+      filter: brightness(1.2);
+      outline: 1px solid rgba(255,255,255,0.4);
+    }
+
+    .category-badge.character { background: #4d96ff; }
+    .category-badge.location { background: #6bcb77; }
+    .category-badge.item { background: #ffd93d; color: #333; }
+    .category-badge.faction { background: #ff6b6b; }
+    .category-badge.concept { background: #a855f7; }
+
+    .lore-card-header .entry-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #eee;
+    }
+
+    .lore-card-text {
+      font-size: 11px;
+      color: #bbb;
+      line-height: 1.5;
+      margin-bottom: 8px;
+      max-height: 80px;
+      overflow: hidden;
+      position: relative;
+      white-space: pre-wrap;
+    }
+
+    .lore-card-text.expanded {
+      max-height: none;
+    }
+
+    .lore-card-keys {
+      font-size: 10px;
+      color: #777;
+      margin-bottom: 8px;
+    }
+
+    .lore-card-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .lore-card-actions button {
+      padding: 3px 10px;
+      font-size: 10px;
+      border-radius: 3px;
+      border: none;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .lore-card-actions .btn-accept {
+      background: #6bcb77;
+      color: #111;
+    }
+
+    .lore-card-actions .btn-edit {
+      background: #4d96ff;
+      color: #fff;
+    }
+
+    .lore-card-actions .btn-reject {
+      background: #ff6b6b;
+      color: #fff;
+    }
+
+    .lore-card-actions button:hover {
+      opacity: 0.8;
+    }
+
+    /* Cleanup Cards */
+    .lore-card.cleanup { border-left-color: #f59e0b; }
+    .category-badge.cleanup { background: #f59e0b; color: #333; }
+
+    .cleanup-comparison {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .cleanup-comparison .cleanup-col {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .cleanup-comparison .cleanup-col h5 {
+      font-size: 10px;
+      color: #888;
+      margin: 0 0 4px 0;
+      text-transform: uppercase;
+    }
+
+    .cleanup-comparison .cleanup-col .cleanup-text {
+      font-size: 11px;
+      color: #bbb;
+      line-height: 1.4;
+      max-height: 80px;
+      overflow: hidden;
+      white-space: pre-wrap;
+      background: #1a1a2e;
+      padding: 6px;
+      border-radius: 4px;
+    }
+
+    .cleanup-arrow {
+      font-size: 12px;
+      color: #f59e0b;
+      display: flex;
+      align-items: center;
+      padding: 0 4px;
+    }
+
+    /* Lore Edit Mode */
+    .lore-edit-area {
+      width: 100%;
+      min-height: 80px;
+      background: #1a1a2e;
+      border: 1px solid #1a4a7a;
+      color: #eee;
+      font-size: 11px;
+      padding: 6px;
+      border-radius: 4px;
+      resize: vertical;
+      font-family: inherit;
+      margin-bottom: 6px;
+    }
+
+    /* Create Entry Section */
+    .lore-create textarea {
+      width: 100%;
+      padding: 6px 8px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: 1px solid #1a4a7a;
+      background: #0f3460;
+      color: #eee;
+      font-family: inherit;
+      resize: vertical;
+      box-sizing: border-box;
+      margin-bottom: 6px;
+    }
+
+    .lore-create-bar {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .lore-create-bar select {
+      flex: 1;
+      padding: 5px 8px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: 1px solid #1a4a7a;
+      background: #0f3460;
+      color: #eee;
+    }
+
+    .lore-create-bar button {
+      padding: 6px 12px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: none;
+      background: #e94560;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    .lore-create-bar button:hover {
+      opacity: 0.8;
+    }
+
+    .lore-create-bar button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .lore-create-preview {
+      margin-top: 10px;
+    }
+
+    .lore-create-preview .lore-create-accept-all {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 8px;
+    }
+
+    .lore-create-preview .lore-create-accept-all button {
+      padding: 5px 12px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: none;
+      background: #6bcb77;
+      color: #000;
+      cursor: pointer;
+    }
+
+    .lore-create-preview .lore-create-accept-all button:hover {
+      opacity: 0.8;
+    }
+
+    /* Enrich Section */
+    .lore-enrich {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .lore-enrich input {
+      flex: 1;
+      padding: 6px 8px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: 1px solid #1a4a7a;
+      background: #0f3460;
+      color: #eee;
+    }
+
+    .lore-enrich button {
+      padding: 6px 12px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: none;
+      background: #a855f7;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    .lore-enrich button:hover {
+      opacity: 0.8;
+    }
+
+    .lore-enrich-preview {
+      background: #0f3460;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 12px;
+    }
+
+    .lore-enrich-preview h4 {
+      font-size: 12px;
+      color: #a855f7;
+      margin-bottom: 6px;
+    }
+
+    .lore-diff {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .lore-diff-col {
+      flex: 1;
+      font-size: 10px;
+      color: #bbb;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .lore-diff-col h5 {
+      font-size: 10px;
+      color: #888;
+      margin-bottom: 4px;
+    }
+
+    /* Lore Settings */
+    .lore-settings label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: #aaa;
+      margin-bottom: 6px;
+      cursor: pointer;
+    }
+
+    .lore-settings select,
+    .lore-settings input[type="range"] {
+      background: #0f3460;
+      color: #eee;
+      border: 1px solid #1a4a7a;
+      border-radius: 4px;
+      padding: 3px 6px;
+      font-size: 11px;
+    }
+
+    .lore-category-toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 4px;
+    }
+
+    .lore-category-toggles label {
+      font-size: 10px;
+    }
+
+    .lore-scan-status {
+      font-size: 11px;
+      color: #888;
+      text-align: center;
+      padding: 8px;
+    }
+
+    .lore-scan-status .spinner {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid #0f3460;
+      border-top: 2px solid #e94560;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+
+    .lore-empty {
+      text-align: center;
+      color: #666;
+      font-size: 12px;
+      padding: 20px 0;
+    }
+
+    .lore-error {
+      background: rgba(255, 107, 107, 0.1);
+      border: 1px solid rgba(255, 107, 107, 0.3);
+      border-radius: 4px;
+      padding: 8px;
+      font-size: 11px;
+      color: #ff6b6b;
+      margin-bottom: 8px;
+    }
+
+    .lore-llm-indicator {
+      font-size: 10px;
+      color: #666;
+      text-align: right;
+      margin-bottom: 8px;
+    }
+
+    .lore-llm-indicator span {
+      color: #a855f7;
+    }
+
+    /* Comprehension Section */
+    .comprehension-content {
+      padding: 8px 0;
+    }
+
+    .comprehension-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 11px;
+      color: #888;
+    }
+
+    .comprehension-progress-bar {
+      flex: 1;
+      height: 4px;
+      background: #0f3460;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .comprehension-progress-bar .fill {
+      height: 100%;
+      background: #e94560;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+
+    .comprehension-controls {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+
+    .comprehension-controls button {
+      padding: 5px 10px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: 1px solid #1a4a7a;
+      background: #0f3460;
+      color: #aaa;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .comprehension-controls button:hover {
+      background: #e94560;
+      color: #fff;
+    }
+
+    .comprehension-controls button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .comprehension-controls button:disabled:hover {
+      background: #0f3460;
+      color: #aaa;
+    }
+
+    #masterSummaryDisplay h4,
+    #entityProfilesList h4 {
+      font-size: 12px;
+      color: #ccc;
+      margin-bottom: 6px;
+    }
+
+    #masterSummaryText {
+      font-size: 11px;
+      color: #bbb;
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }
+
+    .entity-profile-card {
+      background: #0f3460;
+      border-radius: 4px;
+      padding: 8px;
+      margin-bottom: 6px;
+      border-left: 3px solid #888;
+      cursor: pointer;
+    }
+
+    .entity-profile-card.character { border-left-color: #4d96ff; }
+    .entity-profile-card.location { border-left-color: #6bcb77; }
+    .entity-profile-card.item { border-left-color: #ffd93d; }
+    .entity-profile-card.faction { border-left-color: #ff6b6b; }
+    .entity-profile-card.concept { border-left-color: #a855f7; }
+
+    .entity-profile-card .entity-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .entity-profile-card .entity-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: #eee;
+    }
+
+    .entity-profile-card .entity-detail {
+      font-size: 10px;
+      color: #999;
+      line-height: 1.4;
+      margin-top: 4px;
+      display: none;
+    }
+
+    .entity-profile-card.expanded .entity-detail {
+      display: block;
     }
 
     .image-panel-content {
@@ -173,40 +793,151 @@
       margin-bottom: 8px;
     }
 
-    /* Story Suggestions */
-    .suggestions-section {
-      border-top: 1px solid #0f3460;
-      padding-top: 12px;
-      margin-top: 12px;
+    /* Suggestions Popover */
+    .suggestions-btn-wrapper {
+      position: relative;
+      display: inline-flex;
     }
 
-    .suggestions-header {
+    .suggestions-badge {
+      position: absolute;
+      top: -4px;
+      right: -6px;
+      background: #e94560;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      min-width: 16px;
+      height: 16px;
+      border-radius: 8px;
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      cursor: pointer;
-      user-select: none;
-      margin-bottom: 8px;
+      justify-content: center;
+      padding: 0 4px;
+      pointer-events: none;
     }
 
-    .suggestions-header h3 {
+    .suggestions-badge.hidden {
+      display: none;
+    }
+
+    .suggestions-popover {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      margin-top: 1px;
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-top: none;
+      z-index: 500;
+      max-height: 420px;
+      display: flex;
+      flex-direction: column;
+      animation: popoverSlideIn 0.15s ease-out;
+    }
+
+    .suggestions-popover.hidden {
+      display: none;
+    }
+
+    @keyframes popoverSlideIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .popover-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid #0f3460;
+      flex-shrink: 0;
+    }
+
+    .popover-header h3 {
       font-size: 13px;
       color: #e94560;
       margin: 0;
+      flex: 1;
     }
 
-    .suggestions-header .toggle-arrow {
-      font-size: 12px;
+    .popover-header button {
+      background: transparent;
+      border: none;
       color: #888;
-      transition: transform 0.2s;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      transition: background 0.15s, color 0.15s;
     }
 
-    .suggestions-header .toggle-arrow.collapsed {
-      transform: rotate(-90deg);
+    .popover-header button:hover {
+      background: #0f3460;
+      color: #eee;
     }
 
-    .suggestions-body.collapsed {
+    .popover-settings {
+      padding: 8px 12px;
+      border-bottom: 1px solid #0f3460;
       display: none;
+      flex-shrink: 0;
+    }
+
+    .popover-settings.visible {
+      display: block;
+    }
+
+    .popover-settings label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #aaa;
+      cursor: pointer;
+      margin-bottom: 6px;
+    }
+
+    .popover-settings label:last-child {
+      margin-bottom: 0;
+    }
+
+    .popover-settings input[type="checkbox"] {
+      cursor: pointer;
+    }
+
+    .type-filters {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .type-filter-btn {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      border: 1px solid #333;
+      background: transparent;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .type-filter-btn.active {
+      border-color: currentColor;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .type-filter-btn.action { color: #6bcb77; }
+    .type-filter-btn.dialogue { color: #4d96ff; }
+    .type-filter-btn.narrative { color: #ffd93d; }
+
+    .popover-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px;
     }
 
     .suggestion-card {
@@ -826,6 +1557,103 @@
     .sb-link-btn {
       background: #0f3460;
     }
+
+    /* Memory Manager Panel */
+    .memory-panel-content {
+      flex: 1;
+      padding: 12px;
+      overflow-y: auto;
+      display: none;
+    }
+    .memory-panel-content.active {
+      display: block;
+    }
+    .memory-token-bar-bg {
+      width: 100%;
+      height: 8px;
+      background: #333;
+      border-radius: 4px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .memory-token-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.3s ease, background-color 0.3s ease;
+    }
+    .memory-token-info {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #aaa;
+      margin-bottom: 4px;
+    }
+    .memory-action-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .memory-action-bar button {
+      flex: 1;
+      padding: 6px 8px;
+      font-size: 11px;
+      background: #0f3460;
+      color: #ccc;
+      border: 1px solid #1a4a7a;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .memory-action-bar button:hover {
+      background: #1a4a7a;
+      color: #fff;
+    }
+    .memory-action-bar button.danger {
+      border-color: #8b2035;
+    }
+    .memory-action-bar button.danger:hover {
+      background: #e94560;
+    }
+    .memory-progress {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: #aaa;
+      margin-bottom: 10px;
+    }
+    .memory-preview {
+      width: 100%;
+      min-height: 100px;
+      max-height: 200px;
+      background: #111;
+      color: #aaa;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 8px;
+      font-family: monospace;
+      font-size: 11px;
+      resize: vertical;
+      margin-bottom: 10px;
+    }
+    .memory-event-card {
+      font-size: 11px;
+      color: #ccc;
+      padding: 3px 0;
+      border-bottom: 1px solid #222;
+    }
+    .memory-event-card.compressed {
+      opacity: 0.6;
+    }
+    .memory-char-item {
+      font-size: 11px;
+      color: #ccc;
+      padding: 2px 0;
+    }
+    .memory-char-item .char-name {
+      color: #4d96ff;
+      font-weight: 500;
+    }
   </style>
 </head>
 <body>
@@ -834,6 +1662,10 @@
     <button id="generateBtn" class="primary">Generate Scene</button>
     <button id="togglePanelBtn">Toggle Panel</button>
     <button id="storyboardBtn">Storyboard</button>
+    <span class="suggestions-btn-wrapper">
+      <button id="suggestionsBtn">Suggestions</button>
+      <span class="suggestions-badge hidden" id="suggestionsBadge">0</span>
+    </span>
     <button id="settingsBtn">Settings</button>
     <button id="reloadBtn">Reload</button>
     <button id="hardReloadBtn" title="Clear cache and reload">Hard Reload</button>
@@ -843,6 +1675,41 @@
     </label>
     <span class="story-indicator" id="storyIndicator" style="display:none;"></span>
     <span class="status" id="status">Initializing...</span>
+
+    <!-- Suggestions Popover (inside toolbar for correct absolute positioning) -->
+    <div class="suggestions-popover hidden" id="suggestionsPopover">
+    <div class="popover-header">
+      <h3>Suggestions</h3>
+      <button id="popoverRegenBtn" title="Regenerate suggestions">&#8635;</button>
+      <button id="popoverSettingsBtn" title="Settings">&#9881;</button>
+      <button id="popoverCloseBtn" title="Close">&times;</button>
+    </div>
+    <div class="popover-settings" id="popoverSettings">
+      <label>
+        <input type="checkbox" id="suggestionsEnabled" checked>
+        Show suggestions
+      </label>
+      <label>
+        <input type="checkbox" id="suggestionsAutoShow">
+        Auto-show on new suggestions
+      </label>
+      <div class="type-filters">
+        <button class="type-filter-btn action active" data-type="action">Action</button>
+        <button class="type-filter-btn dialogue active" data-type="dialogue">Dialogue</button>
+        <button class="type-filter-btn narrative active" data-type="narrative">Narrative</button>
+      </div>
+    </div>
+    <div class="popover-body" id="popoverBody">
+      <div id="popoverSuggestionsContainer">
+        <div class="suggestions-empty">Suggestions will appear after the AI responds.</div>
+      </div>
+      <div id="popoverLoading" class="loading" style="display: none;">
+        <div class="spinner"></div>
+        <span>Generating suggestions...</span>
+      </div>
+      <div id="popoverStatus" class="suggestion-status"></div>
+    </div>
+  </div>
   </div>
 
   <div class="main-container">
@@ -857,10 +1724,14 @@
 
     <div class="image-panel" id="imagePanel">
       <div class="image-panel-header">
-        <h2>Scene Image</h2>
-        <button id="closePanelBtn">&times;</button>
+        <div class="panel-tabs">
+          <button class="panel-tab active" data-tab="scene" id="sceneTab">Scene</button>
+          <button class="panel-tab" data-tab="lore" id="loreTab">Lore</button>
+          <button class="panel-tab" data-tab="memory" id="memoryTab">Memory</button>
+        </div>
+        <button class="close-btn" id="closePanelBtn">&times;</button>
       </div>
-      <div class="image-panel-content">
+      <div class="image-panel-content active" id="sceneContent">
         <div id="imageContainer">
           <div class="scene-image placeholder">
             Click "Generate Scene" to create an image
@@ -899,25 +1770,284 @@
           </div>
         </div>
 
-        <!-- Story Suggestions -->
-        <div class="suggestions-section">
-          <div class="suggestions-header" id="suggestionsToggle">
-            <h3>Story Suggestions</h3>
-            <span class="toggle-arrow" id="suggestionsArrow">&#9660;</span>
+      </div>
+
+      <!-- Lore Creator Panel -->
+      <div class="lore-panel-content" id="loreContent">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="dot inactive" id="loreProxyDot"></span>
+            <span style="font-size:11px;color:#aaa;" id="loreProxyStatusText">Proxy not connected</span>
           </div>
-          <div class="suggestions-body" id="suggestionsBody">
-            <div id="suggestionsContainer">
-              <div class="suggestions-empty">
-                Suggestions will appear after the AI responds.
+          <div class="lore-llm-indicator" id="loreLlmIndicator" style="margin-bottom:0;">LLM: <span>NovelAI GLM-4-6</span></div>
+        </div>
+
+        <!-- Action Bar -->
+        <div class="lore-action-bar">
+          <div style="flex:1;position:relative;">
+            <button id="loreScanBtn" style="width:100%;">Scan Now</button>
+            <div id="loreScanMenu" class="scan-dropdown" style="display:none;">
+              <button data-scan="all">Scan All</button>
+              <button data-scan="character">Characters</button>
+              <button data-scan="location">Locations</button>
+              <button data-scan="item">Items</button>
+              <button data-scan="faction">Factions</button>
+              <button data-scan="concept">Concepts</button>
+              <button data-scan="relationships">Relationships</button>
+            </div>
+          </div>
+          <button id="loreOrganizeBtn">Organize</button>
+          <button id="loreAcceptAllBtn">Accept All</button>
+          <button id="loreClearBtn">Clear</button>
+        </div>
+
+        <!-- Scan Status -->
+        <div class="lore-scan-status" id="loreScanStatus" style="display:none;">
+          <span class="spinner"></span>
+          <span id="loreScanPhase">Scanning...</span>
+        </div>
+
+        <!-- Error -->
+        <div class="lore-error" id="loreError" style="display:none;"></div>
+
+        <!-- Story Comprehension -->
+        <details class="lore-section" id="comprehensionSection">
+          <summary>Story Comprehension</summary>
+          <div class="comprehension-content">
+            <div class="comprehension-status">
+              <span id="comprehensionStatusText">Not scanned</span>
+              <div class="comprehension-progress-bar">
+                <div class="fill" id="comprehensionProgressFill"></div>
               </div>
             </div>
-            <div id="suggestionsLoading" class="loading" style="display: none;">
-              <div class="spinner"></div>
-              <span>Generating suggestions...</span>
+            <div class="comprehension-controls">
+              <button id="startProgressiveScanBtn">Build Story Knowledge</button>
+              <button id="pauseProgressiveScanBtn" style="display:none">Pause</button>
+              <button id="cancelProgressiveScanBtn" style="display:none">Cancel</button>
             </div>
-            <div id="suggestionStatus" class="suggestion-status"></div>
+            <div id="masterSummaryDisplay" style="display:none">
+              <h4>Story Summary</h4>
+              <p id="masterSummaryText"></p>
+            </div>
+            <div id="entityProfilesList" style="display:none">
+              <h4>Tracked Entities (<span id="entityCount">0</span>)</h4>
+              <div id="entityProfileCards"></div>
+            </div>
           </div>
+        </details>
+
+        <!-- Create Entry -->
+        <details class="lore-section" id="loreCreateSection">
+          <summary>Create Entry</summary>
+          <div class="lore-create">
+            <textarea id="loreCreateInput" rows="2" placeholder='e.g. "a girl named Maya, pretty but quiet"'></textarea>
+            <div class="lore-create-bar">
+              <select id="loreCreateCategory">
+                <option value="auto">Auto-detect</option>
+                <option value="character">Character</option>
+                <option value="location">Location</option>
+                <option value="item">Item</option>
+                <option value="faction">Faction</option>
+                <option value="concept">Concept</option>
+              </select>
+              <button id="loreCreateBtn">Create</button>
+            </div>
+          </div>
+          <div id="loreCreatePreview" class="lore-create-preview" style="display:none"></div>
+        </details>
+
+        <!-- Enrich Entry -->
+        <details class="lore-section" id="loreEnrichSection">
+          <summary>Enrich Entry</summary>
+          <div class="lore-enrich">
+            <input type="text" id="loreEnrichInput" placeholder="e.g. Add Elena's magical abilities">
+            <button id="loreEnrichBtn">Enrich</button>
+          </div>
+          <div class="lore-enrich-preview" id="loreEnrichPreview" style="display:none;">
+            <h4>Enriching: <span id="loreEnrichTarget"></span></h4>
+            <div class="lore-diff">
+              <div class="lore-diff-col"><h5>Current</h5><div id="loreEnrichOld"></div></div>
+              <div class="lore-diff-col"><h5>Proposed</h5><div id="loreEnrichNew"></div></div>
+            </div>
+            <div class="lore-card-actions">
+              <button class="btn-accept" id="loreEnrichAcceptBtn">Accept</button>
+              <button class="btn-edit" id="loreEnrichEditBtn">Edit</button>
+              <button class="btn-reject" id="loreEnrichRejectBtn">Reject</button>
+            </div>
+          </div>
+        </details>
+
+        <!-- Pending Entries -->
+        <details class="lore-section" open>
+          <summary>Pending Entries <span class="count" id="lorePendingCount">(0)</span></summary>
+          <div id="lorePendingList">
+            <div class="lore-empty">No pending entries. Click "Scan Now" to analyze your story.</div>
+          </div>
+        </details>
+
+        <!-- Pending Merges -->
+        <details class="lore-section" id="loreMergesSection" style="display:none;">
+          <summary>Pending Merges <span class="count" id="loreMergesCount">(0)</span></summary>
+          <div id="loreMergesList"></div>
+        </details>
+
+        <!-- Pending Updates -->
+        <details class="lore-section" id="loreUpdatesSection" style="display:none;">
+          <summary>Pending Updates <span class="count" id="loreUpdatesCount">(0)</span></summary>
+          <div id="loreUpdatesList"></div>
+        </details>
+
+        <!-- Pending Cleanups -->
+        <details class="lore-section" id="loreCleanupSection" style="display:none;">
+          <summary>Organize Results <span class="count" id="loreCleanupCount">(0)</span></summary>
+          <div id="loreCleanupList"></div>
+          <div style="padding:6px 0;">
+            <button id="loreCleanupApplyAllBtn" style="padding:4px 12px;font-size:11px;border-radius:4px;border:none;background:#6bcb77;color:#111;cursor:pointer;">Apply All</button>
+          </div>
+        </details>
+
+        <!-- Family Tree -->
+        <details class="lore-section" id="familyTreeSection" style="display:none;">
+          <summary>Family Tree <span class="count" id="familyTreeCount">(0)</span></summary>
+          <div id="familyTreeContainer" style="padding:8px;"></div>
+        </details>
+
+        <!-- Settings -->
+        <details class="lore-section">
+          <summary>Settings</summary>
+          <div class="lore-settings">
+            <label>
+              <input type="checkbox" id="loreAutoScan" checked>
+              Auto-scan after generation
+            </label>
+            <label>
+              <input type="checkbox" id="loreAutoUpdates" checked>
+              Detect entry updates
+            </label>
+            <label>
+              Min chars for scan: <span id="loreMinCharsValue">500</span>
+              <input type="range" id="loreMinChars" min="200" max="2000" step="100" value="500" style="width:100px;">
+            </label>
+            <label>
+              Creativity: <span id="loreTempValue">0.4</span>
+              <input type="range" id="loreTemp" min="0.1" max="1.0" step="0.1" value="0.4" style="width:100px;">
+            </label>
+            <label>
+              Detail Level:
+              <select id="loreDetailLevel">
+                <option value="brief">Brief</option>
+                <option value="standard" selected>Standard</option>
+                <option value="detailed">Detailed</option>
+              </select>
+            </label>
+            <label>
+              LLM Provider:
+              <select id="loreLlmSelect">
+                <option value="novelai">NovelAI GLM-4-6</option>
+                <option value="ollama">Ollama (Local)</option>
+              </select>
+            </label>
+            <div id="loreOllamaSettings" style="display:none; margin-left: 16px;">
+              <label>
+                Model:
+                <select id="loreOllamaModelSelect">
+                  <option value="mistral:7b">mistral:7b</option>
+                </select>
+              </label>
+              <button id="loreOllamaRefreshBtn" style="font-size:10px;padding:2px 8px;background:#0f3460;color:#aaa;border:1px solid #1a4a7a;border-radius:3px;cursor:pointer;">Refresh Models</button>
+            </div>
+            <label>
+              <input type="checkbox" id="loreHybridToggle" checked>
+              Hybrid mode <span style="font-size:10px;color:#888;">(use both NovelAI + Ollama in parallel)</span>
+            </label>
+            <div style="margin-top: 6px;">
+              <span style="font-size: 11px; color: #aaa;">Categories:</span>
+              <div class="lore-category-toggles">
+                <label><input type="checkbox" data-cat="character" checked> Character</label>
+                <label><input type="checkbox" data-cat="location" checked> Location</label>
+                <label><input type="checkbox" data-cat="item" checked> Item</label>
+                <label><input type="checkbox" data-cat="faction" checked> Faction</label>
+                <label><input type="checkbox" data-cat="concept" checked> Concept</label>
+              </div>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <!-- Memory Manager Panel -->
+      <div class="memory-panel-content" id="memoryContent">
+        <!-- Proxy Status -->
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;">
+          <span class="dot inactive" id="memoryProxyDot"></span>
+          <span style="font-size:11px;color:#aaa;" id="memoryProxyText">Proxy not connected</span>
         </div>
+
+        <!-- Token Usage Bar -->
+        <div class="memory-token-info">
+          <span id="memoryTokenCount">Tokens: 0 / 1000</span>
+          <span id="memoryTokenPercent" style="font-weight:500;">0%</span>
+        </div>
+        <div class="memory-token-bar-bg">
+          <div class="memory-token-bar-fill" id="memoryTokenBar" style="width:0%;background:#6bcb77;"></div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="memory-action-bar">
+          <button id="memoryUpdateBtn">Update Now</button>
+          <button id="memoryRefreshBtn">Refresh All</button>
+          <button id="memoryClearBtn" class="danger">Clear</button>
+        </div>
+
+        <!-- Progress Indicator -->
+        <div class="memory-progress" id="memoryProgress" style="display:none;">
+          <span class="spinner"></span>
+          <span id="memoryProgressText">Processing...</span>
+        </div>
+
+        <!-- Memory Preview -->
+        <div style="font-size:11px;color:#888;margin-bottom:4px;">Memory Preview:</div>
+        <textarea class="memory-preview" id="memoryPreview" readonly placeholder="No memory content yet..."></textarea>
+
+        <!-- Event History -->
+        <details class="lore-section">
+          <summary>Event History (<span id="memoryEventCount">0</span> events)</summary>
+          <div id="memoryEventList" style="max-height:200px;overflow-y:auto;"></div>
+        </details>
+
+        <!-- Character States -->
+        <details class="lore-section">
+          <summary>Character States (<span id="memoryCharCount">0</span>)</summary>
+          <div id="memoryCharList"></div>
+        </details>
+
+        <!-- Settings -->
+        <details class="lore-section">
+          <summary>Settings</summary>
+          <div style="padding:8px 0;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+              <span style="font-size:11px;color:#aaa;">Auto-update</span>
+              <input type="checkbox" id="memoryAutoUpdate" checked>
+            </div>
+            <div style="margin-bottom:8px;">
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:#aaa;margin-bottom:2px;">
+                <span>Token Limit</span>
+                <span id="memoryTokenLimitValue">1000</span>
+              </div>
+              <input type="range" id="memoryTokenLimit" min="500" max="2000" step="100" value="1000" style="width:100%;">
+            </div>
+            <div style="margin-bottom:8px;">
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:#aaa;margin-bottom:2px;">
+                <span>Compression Threshold</span>
+                <span id="memoryCompressionValue">80%</span>
+              </div>
+              <input type="range" id="memoryCompression" min="0.5" max="1.0" step="0.05" value="0.8" style="width:100%;">
+            </div>
+            <div>
+              <span style="font-size:11px;color:#aaa;">Tracked Keywords (comma-separated):</span>
+              <input type="text" id="memoryKeywords" placeholder="e.g., John, Castle, Dragon" style="width:100%;margin-top:4px;padding:4px 6px;background:#111;color:#ccc;border:1px solid #333;border-radius:3px;font-size:11px;">
+            </div>
+          </div>
+        </details>
       </div>
     </div>
   </div>
@@ -1314,6 +2444,8 @@
     let currentNegativePrompt = '';
     let currentStoryExcerpt = '';
     let isGenerating = false;
+    let isGeneratingPrompt = false;
+    let lastKnownStoryLength = 0;
 
     // Story state
     let currentStoryId = null;
@@ -1690,38 +2822,30 @@
     generateBtn.addEventListener('click', async () => {
       if (isGenerating) return;
 
-      // Try to read the prompt from the NovelAI page
-      try {
-        // Execute script in webview to find the prompt textarea
-        const result = await webview.executeJavaScript(`
-          (function() {
-            // Look for the Scene Visualizer panel's textarea
-            const textareas = document.querySelectorAll('textarea');
-            for (const ta of textareas) {
-              const val = ta.value || '';
-              if (val.length > 20 && !val.startsWith('(No prompt')) {
-                return val;
-              }
-            }
-            return null;
-          })()
-        `);
+      // If we already have a prompt, use it directly
+      if (currentPrompt) {
+        await generateImage(currentPrompt, currentNegativePrompt);
+        return;
+      }
 
-        if (result) {
-          currentPrompt = result;
-          promptDisplay.textContent = currentPrompt;
-          await generateImage(currentPrompt);
+      // No prompt yet — generate one via Electron-side analysis
+      try {
+        await generateScenePromptFromEditor();
+        if (currentPrompt) {
+          await generateImage(currentPrompt, currentNegativePrompt);
         } else {
-          status.textContent = 'No prompt found - generate story content first';
+          status.textContent = 'No prompt generated — write more story content';
           status.className = 'status error';
           setTimeout(() => {
-            status.textContent = 'Connected';
-            status.className = 'status connected';
+            if (status.textContent === 'No prompt generated — write more story content') {
+              status.textContent = 'Connected';
+              status.className = 'status connected';
+            }
           }, 3000);
         }
       } catch (e) {
-        console.error('Error reading prompt:', e);
-        status.textContent = 'Error reading prompt';
+        console.error('Error generating prompt:', e);
+        status.textContent = 'Error generating prompt';
         status.className = 'status error';
       }
     });
@@ -2065,6 +3189,9 @@
           generateImage(data.prompt, data.negativePrompt);
         }
       }
+
+      // Generate suggestions in parallel via Electron direct API
+      generateSuggestionsFromEditor();
     });
 
     // Listen for token status changes
@@ -2080,34 +3207,146 @@
     });
 
     // ========================================================================
-    // STORY SUGGESTIONS
+    // SUGGESTIONS POPOVER
     // ========================================================================
 
-    const suggestionsToggle = document.getElementById('suggestionsToggle');
-    const suggestionsArrow = document.getElementById('suggestionsArrow');
-    const suggestionsBody = document.getElementById('suggestionsBody');
-    const suggestionsContainer = document.getElementById('suggestionsContainer');
-    const suggestionsLoading = document.getElementById('suggestionsLoading');
-    const suggestionStatus = document.getElementById('suggestionStatus');
+    const suggestionsBtn = document.getElementById('suggestionsBtn');
+    const suggestionsBadge = document.getElementById('suggestionsBadge');
+    const suggestionsPopover = document.getElementById('suggestionsPopover');
+    const popoverCloseBtn = document.getElementById('popoverCloseBtn');
+    const popoverRegenBtn = document.getElementById('popoverRegenBtn');
+    const popoverSettingsBtn = document.getElementById('popoverSettingsBtn');
+    const popoverSettings = document.getElementById('popoverSettings');
+    const popoverBody = document.getElementById('popoverBody');
+    const popoverSuggestionsContainer = document.getElementById('popoverSuggestionsContainer');
+    const popoverLoading = document.getElementById('popoverLoading');
+    const popoverStatus = document.getElementById('popoverStatus');
+    const suggestionsEnabledCheckbox = document.getElementById('suggestionsEnabled');
+    const suggestionsAutoShowCheckbox = document.getElementById('suggestionsAutoShow');
 
-    // Toggle collapse
-    suggestionsToggle.addEventListener('click', () => {
-      suggestionsBody.classList.toggle('collapsed');
-      suggestionsArrow.classList.toggle('collapsed');
+    // Badge count tracking
+    let suggestionsBadgeCount = 0;
+    let currentSuggestions = [];
+
+    // Load popover settings from localStorage
+    const popoverPrefs = JSON.parse(localStorage.getItem('suggestionsPopoverPrefs') || '{}');
+    suggestionsEnabledCheckbox.checked = popoverPrefs.enabled !== false;
+    suggestionsAutoShowCheckbox.checked = popoverPrefs.autoShow === true;
+    const activeTypeFilters = new Set(popoverPrefs.typeFilters || ['action', 'dialogue', 'narrative']);
+
+    // Init type filter button states
+    document.querySelectorAll('.type-filter-btn').forEach(btn => {
+      const type = btn.dataset.type;
+      btn.classList.toggle('active', activeTypeFilters.has(type));
+    });
+
+    function savePopoverPrefs() {
+      localStorage.setItem('suggestionsPopoverPrefs', JSON.stringify({
+        enabled: suggestionsEnabledCheckbox.checked,
+        autoShow: suggestionsAutoShowCheckbox.checked,
+        typeFilters: Array.from(activeTypeFilters),
+      }));
+    }
+
+    suggestionsEnabledCheckbox.addEventListener('change', savePopoverPrefs);
+    suggestionsAutoShowCheckbox.addEventListener('change', savePopoverPrefs);
+
+    // Type filter button clicks
+    document.querySelectorAll('.type-filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const type = btn.dataset.type;
+        if (activeTypeFilters.has(type)) {
+          activeTypeFilters.delete(type);
+          btn.classList.remove('active');
+        } else {
+          activeTypeFilters.add(type);
+          btn.classList.add('active');
+        }
+        savePopoverPrefs();
+        renderSuggestions(currentSuggestions);
+      });
+    });
+
+    // Toggle popover
+    function openPopover() {
+      suggestionsPopover.classList.remove('hidden');
+      // Clear badge on open
+      suggestionsBadgeCount = 0;
+      suggestionsBadge.classList.add('hidden');
+    }
+
+    function closePopover() {
+      suggestionsPopover.classList.add('hidden');
+    }
+
+    suggestionsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (suggestionsPopover.classList.contains('hidden')) {
+        openPopover();
+      } else {
+        closePopover();
+      }
+    });
+
+    popoverCloseBtn.addEventListener('click', closePopover);
+
+    // Outside-click dismiss
+    document.addEventListener('click', (e) => {
+      if (!suggestionsPopover.classList.contains('hidden') &&
+          !suggestionsPopover.contains(e.target) &&
+          !suggestionsBtn.contains(e.target)) {
+        closePopover();
+      }
+    });
+
+    // Escape key dismiss
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !suggestionsPopover.classList.contains('hidden')) {
+        closePopover();
+      }
+    });
+
+    // Settings toggle
+    popoverSettingsBtn.addEventListener('click', () => {
+      popoverSettings.classList.toggle('visible');
+    });
+
+    // Regenerate button
+    popoverRegenBtn.addEventListener('click', async () => {
+      popoverRegenBtn.disabled = true;
+      try {
+        await generateSuggestionsFromEditor();
+      } catch (e) {
+        console.error('[Renderer] Regen suggestions error:', e);
+      } finally {
+        popoverRegenBtn.disabled = false;
+      }
     });
 
     /**
-     * Render suggestion cards from data
+     * Render suggestion cards in the popover with type filtering
      */
     function renderSuggestions(suggestions) {
-      suggestionsContainer.innerHTML = '';
+      popoverSuggestionsContainer.innerHTML = '';
 
       if (!suggestions || suggestions.length === 0) {
-        suggestionsContainer.innerHTML = '<div class="suggestions-empty">Suggestions will appear after the AI responds.</div>';
+        popoverSuggestionsContainer.innerHTML = '<div class="suggestions-empty">Suggestions will appear after the AI responds.</div>';
         return;
       }
 
-      for (const suggestion of suggestions) {
+      if (!suggestionsEnabledCheckbox.checked) {
+        popoverSuggestionsContainer.innerHTML = '<div class="suggestions-empty">Suggestions are disabled.</div>';
+        return;
+      }
+
+      const filtered = suggestions.filter(s => activeTypeFilters.has(s.type || 'mixed') || s.type === 'mixed');
+
+      if (filtered.length === 0) {
+        popoverSuggestionsContainer.innerHTML = '<div class="suggestions-empty">No suggestions match current filters.</div>';
+        return;
+      }
+
+      for (const suggestion of filtered) {
         const card = document.createElement('div');
         card.className = 'suggestion-card type-' + (suggestion.type || 'mixed');
 
@@ -2127,20 +3366,32 @@
           insertSuggestionIntoEditor(suggestion);
         });
 
-        suggestionsContainer.appendChild(card);
+        popoverSuggestionsContainer.appendChild(card);
       }
     }
 
     /**
-     * Show a temporary status message in the suggestions section
+     * Show a temporary status message in the popover
      */
     function showSuggestionStatus(message, type) {
-      suggestionStatus.textContent = message;
-      suggestionStatus.className = 'suggestion-status ' + type;
+      popoverStatus.textContent = message;
+      popoverStatus.className = 'suggestion-status ' + type;
       setTimeout(() => {
-        suggestionStatus.className = 'suggestion-status';
-        suggestionStatus.style.display = 'none';
+        popoverStatus.className = 'suggestion-status';
+        popoverStatus.style.display = 'none';
       }, 3000);
+    }
+
+    /**
+     * Update the badge counter
+     */
+    function updateBadge(count) {
+      if (count > 0) {
+        suggestionsBadge.textContent = String(count);
+        suggestionsBadge.classList.remove('hidden');
+      } else {
+        suggestionsBadge.classList.add('hidden');
+      }
     }
 
     /**
@@ -2230,36 +3481,178 @@
     window.sceneVisualizer.onSuggestionsUpdate((data) => {
       console.log('[Renderer] Received suggestions update:', data);
 
+      if (!suggestionsEnabledCheckbox.checked) return;
+
       if (data.isLoading) {
-        suggestionsLoading.style.display = 'flex';
-        suggestionsContainer.innerHTML = '';
-        // Auto-expand if collapsed
-        suggestionsBody.classList.remove('collapsed');
-        suggestionsArrow.classList.remove('collapsed');
+        popoverLoading.style.display = 'flex';
+        popoverSuggestionsContainer.innerHTML = '';
         return;
       }
 
-      suggestionsLoading.style.display = 'none';
+      popoverLoading.style.display = 'none';
 
       if (data.error) {
-        suggestionsContainer.innerHTML = '';
+        popoverSuggestionsContainer.innerHTML = '';
         const errDiv = document.createElement('div');
         errDiv.className = 'suggestions-error';
         errDiv.innerHTML = '<div class="error-title">Error generating suggestions</div>' +
           '<div class="error-detail">' + (data.error.length > 100 ? data.error.slice(0, 100) + '...' : data.error) + '</div>';
-        suggestionsContainer.appendChild(errDiv);
+        popoverSuggestionsContainer.appendChild(errDiv);
         return;
       }
 
       if (data.suggestions) {
+        currentSuggestions = data.suggestions;
         renderSuggestions(data.suggestions);
-        // Auto-expand when new suggestions arrive
-        if (data.suggestions.length > 0) {
-          suggestionsBody.classList.remove('collapsed');
-          suggestionsArrow.classList.remove('collapsed');
+
+        // Badge: increment if popover is closed
+        if (data.suggestions.length > 0 && suggestionsPopover.classList.contains('hidden')) {
+          suggestionsBadgeCount = data.suggestions.length;
+          updateBadge(suggestionsBadgeCount);
+        }
+
+        // Auto-show popover if enabled
+        if (data.suggestions.length > 0 && suggestionsAutoShowCheckbox.checked) {
+          openPopover();
         }
       }
     });
+
+    // Electron-side suggestion generation — triggered when prompt update arrives.
+    // Reads story text directly from NovelAI's ProseMirror editor via executeJavaScript,
+    // then calls Electron main process to generate suggestions in parallel with image gen.
+    async function generateSuggestionsFromEditor() {
+      if (!suggestionsEnabledCheckbox.checked) return;
+
+      try {
+        const storyText = await webview.executeJavaScript(`
+          (function() {
+            var editor = document.querySelector('.ProseMirror');
+            if (editor) return editor.innerText;
+            return '';
+          })()
+        `);
+        if (!storyText || storyText.length < 100) return;
+
+        // Use last 4000 chars to match suggestion context limit
+        const contextText = storyText.length > 4000 ? storyText.slice(-4000) : storyText;
+
+        console.log('[Renderer] Generating suggestions via Electron direct API...');
+        popoverLoading.style.display = 'flex';
+        popoverSuggestionsContainer.innerHTML = '';
+
+        const result = await window.sceneVisualizer.generateSuggestionsDirect(contextText);
+        popoverLoading.style.display = 'none';
+
+        if (result.success && result.suggestions) {
+          currentSuggestions = result.suggestions;
+          renderSuggestions(result.suggestions);
+
+          // Persist suggestions for this story
+          if (currentStoryId) {
+            try {
+              const sceneState = await window.sceneVisualizer.sceneGetState(currentStoryId);
+              sceneState.suggestions = result.suggestions;
+              await window.sceneVisualizer.sceneSetState(currentStoryId, sceneState);
+            } catch (e) { /* non-fatal */ }
+          }
+
+          if (result.suggestions.length > 0 && suggestionsPopover.classList.contains('hidden')) {
+            suggestionsBadgeCount = result.suggestions.length;
+            updateBadge(suggestionsBadgeCount);
+          }
+          if (result.suggestions.length > 0 && suggestionsAutoShowCheckbox.checked) {
+            openPopover();
+          }
+        } else if (result.error) {
+          console.error('[Renderer] Electron-side suggestion generation failed:', result.error);
+        }
+      } catch (e) {
+        popoverLoading.style.display = 'none';
+        console.error('[Renderer] Electron-side suggestion generation error:', e);
+      }
+    }
+
+    // Electron-side scene prompt generation — reads story text + lorebook entries,
+    // calls GLM-4-6 to produce an image prompt, then triggers image gen + suggestions.
+    async function generateScenePromptFromEditor() {
+      // Skip if any LLM operation is in progress (avoids NovelAI 429 concurrent lock)
+      if (isGeneratingPrompt || isGenerating || loreIsScanning) return;
+      if (typeof memoryIsProcessing !== 'undefined' && memoryIsProcessing) return;
+      if (typeof comprehensionScanning !== 'undefined' && comprehensionScanning) return;
+      isGeneratingPrompt = true;
+
+      try {
+        const storyText = await readStoryTextFromDOM();
+        if (!storyText || storyText.length < 100) {
+          isGeneratingPrompt = false;
+          return;
+        }
+
+        // Get lorebook entries (best-effort)
+        let entries = [];
+        try {
+          entries = await loreCall('getEntries');
+        } catch (e) {
+          console.log('[Renderer] Could not read lorebook entries:', e.message);
+        }
+
+        // Get art style from settings
+        const artStyle = novelaiArtStyleSelect ? novelaiArtStyleSelect.value : 'anime style, detailed, high quality';
+
+        console.log('[Renderer] Generating scene prompt via Electron...');
+        status.textContent = 'Analyzing scene...';
+        status.className = 'status generating';
+
+        const result = await window.sceneVisualizer.generateScenePrompt({
+          storyText: storyText.slice(-3000),
+          entries,
+          artStyle: artStyle === 'no-style' ? 'anime style, detailed, high quality' : artStyle,
+        });
+
+        if (result.success) {
+          currentPrompt = result.prompt;
+          currentNegativePrompt = result.negativePrompt || '';
+          promptDisplay.textContent = currentPrompt;
+
+          status.textContent = 'Prompt ready';
+          status.className = 'status connected';
+          imagePanel.classList.remove('hidden');
+
+          // Persist state for this story
+          if (currentStoryId) {
+            window.sceneVisualizer.sceneSetState(currentStoryId, {
+              lastPrompt: currentPrompt,
+              lastNegativePrompt: currentNegativePrompt,
+              lastStoryLength: storyText.length,
+              artStyle,
+            });
+          }
+
+          // Auto-generate image if toggle is on
+          if (autoGenerateToggle.checked && !isGenerating) {
+            generateImage(currentPrompt, currentNegativePrompt);
+          }
+
+          // Generate suggestions in parallel
+          generateSuggestionsFromEditor();
+        } else {
+          console.error('[Renderer] Scene prompt generation failed:', result.error);
+          status.textContent = 'Prompt generation failed';
+          status.className = 'status error';
+          setTimeout(() => {
+            if (status.textContent === 'Prompt generation failed') {
+              status.textContent = 'Connected';
+              status.className = 'status connected';
+            }
+          }, 4000);
+        }
+      } catch (e) {
+        console.error('[Renderer] Scene prompt generation error:', e);
+      } finally {
+        isGeneratingPrompt = false;
+      }
+    }
 
     // ========================================================================
     // STORY CONTEXT — auto-switch storyboards per story
@@ -2272,15 +3665,59 @@
       currentStoryTitle = storyTitle || null;
 
       // Update toolbar indicator
-      if (storyTitle) {
-        storyIndicator.textContent = 'Story: ' + storyTitle;
-        storyIndicator.style.display = '';
-      } else {
-        storyIndicator.textContent = 'Story: ' + storyId.slice(0, 12);
-        storyIndicator.style.display = '';
+      storyIndicator.textContent = 'Story: ' + (storyTitle || storyId.slice(0, 12));
+      storyIndicator.style.display = '';
+
+      // SINGLE CALL: load all per-story data from SQLite
+      try {
+        const allData = await window.sceneVisualizer.storyLoadAll(storyId, storyTitle);
+
+        // Restore scene state
+        const ss = allData.sceneState;
+        if (ss && ss.lastPrompt) {
+          currentPrompt = ss.lastPrompt;
+          currentNegativePrompt = ss.lastNegativePrompt || '';
+          lastKnownStoryLength = ss.lastStoryLength || 0;
+          promptDisplay.textContent = currentPrompt;
+          if (ss.suggestions && ss.suggestions.length > 0) {
+            currentSuggestions = ss.suggestions;
+            renderSuggestions(ss.suggestions);
+            suggestionsBadgeCount = ss.suggestions.length;
+            updateBadge(suggestionsBadgeCount);
+          }
+        } else {
+          currentPrompt = '';
+          currentNegativePrompt = '';
+          lastKnownStoryLength = 0;
+          promptDisplay.textContent = '(Waiting for story content...)';
+          currentSuggestions = [];
+          renderSuggestions([]);
+          updateBadge(0);
+        }
+
+        // Eagerly restore lore state
+        if (allData.loreState) {
+          loreState = allData.loreState;
+          refreshLoreUI();
+        }
+
+        // Eagerly restore comprehension
+        if (allData.comprehension) {
+          renderComprehensionState(allData.comprehension);
+        }
+
+        // Eagerly restore memory state
+        if (allData.memoryState) {
+          memoryState = allData.memoryState;
+          renderMemoryUI();
+        }
+
+        console.log('[Renderer] Eagerly loaded all data for story:', storyId);
+      } catch (e) {
+        console.error('[Renderer] Failed to load story data:', e.message);
       }
 
-      // Auto-switch storyboard
+      // Auto-switch storyboard (filesystem-based, unchanged)
       try {
         const result = await window.sceneVisualizer.storyboardGetOrCreateForStory(storyId, storyTitle);
         if (result && result.id) {
@@ -2293,7 +3730,6 @@
           } else {
             console.log('[Renderer] Switched to storyboard:', activeStoryboardName);
           }
-          // Update commit story label
           if (storyTitle) {
             commitStoryLabel.textContent = 'Story: ' + storyTitle;
             commitStoryLabel.style.display = '';
@@ -2730,30 +4166,2707 @@
       }
     }
 
-    // Fallback polling — reduced interval since bridge is primary
-    setInterval(async () => {
-      if (!isGenerating) {
+    // =========================================================================
+    // LORE CREATOR
+    // =========================================================================
+
+    const sceneTab = document.getElementById('sceneTab');
+    const loreTab = document.getElementById('loreTab');
+    const memoryTab = document.getElementById('memoryTab');
+    const sceneContent = document.getElementById('sceneContent');
+    const loreContent = document.getElementById('loreContent');
+    const memoryContent = document.getElementById('memoryContent');
+    const loreScanBtn = document.getElementById('loreScanBtn');
+    const loreOrganizeBtn = document.getElementById('loreOrganizeBtn');
+    const loreAcceptAllBtn = document.getElementById('loreAcceptAllBtn');
+    const loreClearBtn = document.getElementById('loreClearBtn');
+    const loreCleanupSection = document.getElementById('loreCleanupSection');
+    const loreCleanupList = document.getElementById('loreCleanupList');
+    const loreCleanupCount = document.getElementById('loreCleanupCount');
+    const loreCleanupApplyAllBtn = document.getElementById('loreCleanupApplyAllBtn');
+    const loreScanStatus = document.getElementById('loreScanStatus');
+    const loreScanPhase = document.getElementById('loreScanPhase');
+    const loreError = document.getElementById('loreError');
+    const lorePendingList = document.getElementById('lorePendingList');
+    const lorePendingCount = document.getElementById('lorePendingCount');
+    const loreMergesSection = document.getElementById('loreMergesSection');
+    const loreMergesList = document.getElementById('loreMergesList');
+    const loreMergesCount = document.getElementById('loreMergesCount');
+    const loreUpdatesSection = document.getElementById('loreUpdatesSection');
+    const loreUpdatesList = document.getElementById('loreUpdatesList');
+    const loreUpdatesCount = document.getElementById('loreUpdatesCount');
+    const loreLlmIndicator = document.getElementById('loreLlmIndicator');
+    const loreCreateInput = document.getElementById('loreCreateInput');
+    const loreCreateBtn = document.getElementById('loreCreateBtn');
+    const loreCreateCategory = document.getElementById('loreCreateCategory');
+    const loreCreatePreview = document.getElementById('loreCreatePreview');
+    const loreEnrichInput = document.getElementById('loreEnrichInput');
+    const loreEnrichBtn = document.getElementById('loreEnrichBtn');
+    const loreEnrichPreview = document.getElementById('loreEnrichPreview');
+    const loreEnrichTarget = document.getElementById('loreEnrichTarget');
+    const loreEnrichOld = document.getElementById('loreEnrichOld');
+    const loreEnrichNew = document.getElementById('loreEnrichNew');
+    const loreEnrichAcceptBtn = document.getElementById('loreEnrichAcceptBtn');
+    const loreEnrichEditBtn = document.getElementById('loreEnrichEditBtn');
+    const loreEnrichRejectBtn = document.getElementById('loreEnrichRejectBtn');
+
+    // Settings elements
+    const loreAutoScan = document.getElementById('loreAutoScan');
+    const loreAutoUpdates = document.getElementById('loreAutoUpdates');
+    const loreMinChars = document.getElementById('loreMinChars');
+    const loreMinCharsValue = document.getElementById('loreMinCharsValue');
+    const loreTemp = document.getElementById('loreTemp');
+    const loreTempValue = document.getElementById('loreTempValue');
+    const loreDetailLevel = document.getElementById('loreDetailLevel');
+    const loreLlmSelect = document.getElementById('loreLlmSelect');
+    const loreOllamaSettings = document.getElementById('loreOllamaSettings');
+    const loreOllamaModelSelect = document.getElementById('loreOllamaModelSelect');
+    const loreOllamaRefreshBtn = document.getElementById('loreOllamaRefreshBtn');
+    const loreHybridToggle = document.getElementById('loreHybridToggle');
+
+    // Lore state
+    let loreState = null;
+    let loreSettings = null;
+    let loreIsScanning = false;
+    let loreEnrichResult = null; // {entry, updatedText, originalText, displayName}
+    let loreProxyReady = false;
+    let loreLastStoryLength = 0;
+
+    // Tab switching
+    function switchPanelTab(tab) {
+      // Deactivate all tabs and panels
+      sceneTab.classList.remove('active');
+      loreTab.classList.remove('active');
+      memoryTab.classList.remove('active');
+      sceneContent.classList.remove('active');
+      sceneContent.style.display = 'none';
+      loreContent.classList.remove('active');
+      loreContent.style.display = 'none';
+      memoryContent.classList.remove('active');
+      memoryContent.style.display = 'none';
+
+      if (tab === 'scene') {
+        sceneTab.classList.add('active');
+        sceneContent.classList.add('active');
+        sceneContent.style.display = '';
+      } else if (tab === 'lore') {
+        loreTab.classList.add('active');
+        loreContent.classList.add('active');
+        loreContent.style.display = '';
+        refreshLoreUI();
+      } else if (tab === 'memory') {
+        memoryTab.classList.add('active');
+        memoryContent.classList.add('active');
+        memoryContent.style.display = '';
+        refreshMemoryUI();
+      }
+    }
+
+    sceneTab.addEventListener('click', () => switchPanelTab('scene'));
+    loreTab.addEventListener('click', () => switchPanelTab('lore'));
+    memoryTab.addEventListener('click', () => switchPanelTab('memory'));
+
+    // Initialize lore settings
+    async function initLore() {
+      try {
+        loreSettings = await window.sceneVisualizer.loreGetSettings();
+        loreAutoScan.checked = loreSettings.autoScan;
+        loreAutoUpdates.checked = loreSettings.autoDetectUpdates;
+        loreMinChars.value = loreSettings.minNewCharsForScan;
+        loreMinCharsValue.textContent = loreSettings.minNewCharsForScan;
+        loreTemp.value = loreSettings.temperature;
+        loreTempValue.textContent = loreSettings.temperature;
+        loreDetailLevel.value = loreSettings.detailLevel;
+
+        // Category toggles
+        document.querySelectorAll('.lore-category-toggles input[data-cat]').forEach(cb => {
+          cb.checked = loreSettings.enabledCategories[cb.dataset.cat] !== false;
+        });
+
+        // LLM provider
+        const llmConfig = await window.sceneVisualizer.loreGetLlmProvider();
+        loreLlmSelect.value = llmConfig.provider;
+        updateLlmIndicator(llmConfig.provider, llmConfig.ollamaModel);
+        if (llmConfig.provider === 'ollama') {
+          loreOllamaSettings.style.display = '';
+          refreshOllamaModels();
+        }
+
+        // Hybrid toggle
+        loreHybridToggle.checked = loreSettings.hybridEnabled !== false;
+      } catch (e) {
+        console.log('[Lore] Init error:', e);
+      }
+    }
+    initLore();
+
+    async function updateLlmIndicator(provider, model) {
+      const primary = provider === 'ollama'
+        ? 'Ollama ' + (model || 'mistral:7b')
+        : 'NovelAI GLM-4-6';
+
+      // Check if hybrid is enabled in settings and secondary is available
+      const hybridEnabled = loreHybridToggle.checked;
+      let hybridLabel = '';
+      if (hybridEnabled) {
         try {
-          const result = await webview.executeJavaScript(`
-            (function() {
-              const textareas = document.querySelectorAll('textarea');
-              for (const ta of textareas) {
-                const val = ta.value || '';
-                if (val.length > 20 && !val.startsWith('(No prompt')) {
-                  return val;
+          if (provider === 'ollama') {
+            hybridLabel = ' + NovelAI';
+          } else {
+            const ollamaStatus = await window.sceneVisualizer.loreCheckOllama();
+            if (ollamaStatus.available) {
+              hybridLabel = ' + Ollama';
+            }
+          }
+        } catch {}
+      }
+
+      if (hybridLabel) {
+        loreLlmIndicator.innerHTML = 'LLM: <span>' + primary + '</span> <span style="color:#22c55e;font-weight:bold;">⚡ Hybrid</span> <span style="color:#888;font-size:9px;">(' + primary + hybridLabel + ')</span>';
+      } else {
+        loreLlmIndicator.innerHTML = 'LLM: <span>' + primary + '</span>';
+      }
+    }
+
+    // Settings change handlers
+    function saveLoreSettings() {
+      const cats = {};
+      document.querySelectorAll('.lore-category-toggles input[data-cat]').forEach(cb => {
+        cats[cb.dataset.cat] = cb.checked;
+      });
+      loreSettings = {
+        autoScan: loreAutoScan.checked,
+        autoDetectUpdates: loreAutoUpdates.checked,
+        minNewCharsForScan: parseInt(loreMinChars.value),
+        temperature: parseFloat(loreTemp.value),
+        detailLevel: loreDetailLevel.value,
+        enabledCategories: cats,
+        hybridEnabled: loreHybridToggle.checked,
+      };
+      window.sceneVisualizer.loreSetSettings(loreSettings);
+    }
+
+    loreAutoScan.addEventListener('change', saveLoreSettings);
+    loreAutoUpdates.addEventListener('change', saveLoreSettings);
+    loreHybridToggle.addEventListener('change', async () => {
+      saveLoreSettings();
+      const llmConfig = await window.sceneVisualizer.loreGetLlmProvider();
+      updateLlmIndicator(llmConfig.provider, llmConfig.ollamaModel);
+    });
+    loreMinChars.addEventListener('input', () => {
+      loreMinCharsValue.textContent = loreMinChars.value;
+      saveLoreSettings();
+    });
+    loreTemp.addEventListener('input', () => {
+      loreTempValue.textContent = loreTemp.value;
+      saveLoreSettings();
+    });
+    loreDetailLevel.addEventListener('change', saveLoreSettings);
+    document.querySelectorAll('.lore-category-toggles input[data-cat]').forEach(cb => {
+      cb.addEventListener('change', saveLoreSettings);
+    });
+
+    loreLlmSelect.addEventListener('change', async () => {
+      const provider = loreLlmSelect.value;
+      loreOllamaSettings.style.display = provider === 'ollama' ? '' : 'none';
+      await window.sceneVisualizer.loreSetLlmProvider({ provider });
+      if (provider === 'ollama') await refreshOllamaModels();
+      const llmConfig = await window.sceneVisualizer.loreGetLlmProvider();
+      updateLlmIndicator(llmConfig.provider, llmConfig.ollamaModel);
+    });
+
+    loreOllamaModelSelect.addEventListener('change', async () => {
+      await window.sceneVisualizer.loreSetLlmProvider({ ollamaModel: loreOllamaModelSelect.value });
+      updateLlmIndicator('ollama', loreOllamaModelSelect.value);
+    });
+
+    async function refreshOllamaModels() {
+      const result = await window.sceneVisualizer.loreCheckOllama();
+      loreOllamaModelSelect.innerHTML = '';
+      if (result.available && result.models) {
+        for (const m of result.models) {
+          const opt = document.createElement('option');
+          opt.value = m.name;
+          opt.textContent = m.name;
+          loreOllamaModelSelect.appendChild(opt);
+        }
+        const llmConfig = await window.sceneVisualizer.loreGetLlmProvider();
+        loreOllamaModelSelect.value = llmConfig.ollamaModel;
+      } else {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'Ollama not available';
+        loreOllamaModelSelect.appendChild(opt);
+      }
+    }
+
+    loreOllamaRefreshBtn.addEventListener('click', refreshOllamaModels);
+
+    // =========================================================================
+    // DOM-BASED MEMORY HELPERS
+    // Read/write NovelAI's Memory field directly via DOM manipulation.
+    // This works regardless of proxy panel visibility — it finds the Memory
+    // textarea in NovelAI's story settings sidebar and manipulates it directly.
+    // =========================================================================
+
+    async function readMemoryFromDOM() {
+      try {
+        return await webview.executeJavaScript(`
+          (function() {
+            // Strategy 1: Look for the Memory textarea by placeholder text
+            var textareas = document.querySelectorAll('textarea');
+            for (var i = 0; i < textareas.length; i++) {
+              var ph = (textareas[i].placeholder || '').toLowerCase();
+              if (ph.includes('memory')) return textareas[i].value;
+            }
+            // Strategy 2: Look for a label containing "Memory" near a textarea
+            var labels = document.querySelectorAll('label, span, div');
+            for (var j = 0; j < labels.length; j++) {
+              var text = (labels[j].textContent || '').trim();
+              if (text === 'Memory' || text === 'memory') {
+                var parent = labels[j].parentElement;
+                for (var k = 0; k < 5 && parent; k++) {
+                  var ta = parent.querySelector('textarea');
+                  if (ta) return ta.value;
+                  parent = parent.parentElement;
                 }
               }
-              return null;
-            })()
-          `);
+            }
+            return null;
+          })()
+        `);
+      } catch (e) {
+        console.log('[DOM] Error reading memory:', e);
+        return null;
+      }
+    }
 
-          if (result && result !== currentPrompt) {
-            currentPrompt = result;
-            promptDisplay.textContent = currentPrompt;
+    async function writeMemoryToDOM(text) {
+      try {
+        return await webview.executeJavaScript(`
+          (function() {
+            var targetTA = null;
+            // Strategy 1: placeholder
+            var textareas = document.querySelectorAll('textarea');
+            for (var i = 0; i < textareas.length; i++) {
+              var ph = (textareas[i].placeholder || '').toLowerCase();
+              if (ph.includes('memory')) { targetTA = textareas[i]; break; }
+            }
+            // Strategy 2: label
+            if (!targetTA) {
+              var labels = document.querySelectorAll('label, span, div');
+              for (var j = 0; j < labels.length; j++) {
+                var text = (labels[j].textContent || '').trim();
+                if (text === 'Memory' || text === 'memory') {
+                  var parent = labels[j].parentElement;
+                  for (var k = 0; k < 5 && parent; k++) {
+                    var ta = parent.querySelector('textarea');
+                    if (ta) { targetTA = ta; break; }
+                    parent = parent.parentElement;
+                  }
+                  if (targetTA) break;
+                }
+              }
+            }
+            if (!targetTA) return false;
+            var setter = Object.getOwnPropertyDescriptor(
+              window.HTMLTextAreaElement.prototype, 'value'
+            ).set;
+            setter.call(targetTA, ${JSON.stringify(text)});
+            targetTA.dispatchEvent(new Event('input', { bubbles: true }));
+            targetTA.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          })()
+        `);
+      } catch (e) {
+        console.log('[DOM] Error writing memory:', e);
+        return false;
+      }
+    }
+
+    // Read story text directly from ProseMirror editor in the webview DOM
+    async function readStoryTextFromDOM() {
+      try {
+        return await webview.executeJavaScript(`
+          (function() {
+            // ProseMirror editor has class .ProseMirror
+            var pm = document.querySelector('.ProseMirror');
+            if (pm) return pm.textContent || '';
+            // Fallback: contenteditable div
+            var ce = document.querySelector('[contenteditable="true"]');
+            if (ce) return ce.textContent || '';
+            return null;
+          })()
+        `);
+      } catch (e) {
+        console.log('[DOM] Error reading story text:', e);
+        return null;
+      }
+    }
+
+    // =========================================================================
+    // DIRECT NOVELAI STATE ACCESS
+    // Access NovelAI's internal React state for lorebook/memory operations.
+    // This bypasses the proxy panel requirement by walking the React fiber
+    // tree to find the decrypted story data in memory.
+    // =========================================================================
+
+    // Probe the webview's internal state to discover available data paths
+    async function probeNovelAIState() {
+      try {
+        return await webview.executeJavaScript(`
+          (function() {
+            var result = { strategies: [], time: Date.now() };
+
+            // Check React fiber tree
+            var root = document.getElementById('__next');
+            if (root) {
+              var fiberKey = Object.keys(root).find(function(k) { return k.startsWith('__reactFiber'); });
+              if (fiberKey) {
+                result.strategies.push('react-fiber');
+                result.fiberKey = fiberKey;
+              }
+            }
+
+            // Check for API log
+            if (window.__naiApiLog) {
+              result.apiLogEntries = window.__naiApiLog.length;
+              result.strategies.push('api-log');
+            }
+
+            // Check __NEXT_DATA__
+            if (window.__NEXT_DATA__) {
+              result.strategies.push('next-data');
+              result.nextDataKeys = Object.keys(window.__NEXT_DATA__);
+            }
+
+            // Try to find Zustand stores (common in Next.js apps)
+            // Zustand stores attach to window when using devtools middleware
+            var storeKeys = Object.getOwnPropertyNames(window).filter(function(k) {
+              try {
+                var v = window[k];
+                return v && typeof v === 'object' && typeof v.getState === 'function';
+              } catch(e) { return false; }
+            });
+            if (storeKeys.length > 0) {
+              result.strategies.push('zustand');
+              result.zustandStores = storeKeys;
+            }
+
+            return result;
+          })()
+        `);
+      } catch (e) {
+        console.error('[Probe] Error:', e);
+        return { strategies: [], error: e.message };
+      }
+    }
+
+    // Walk React fiber tree to find a state matching a predicate
+    // Returns the first matching state object, or null
+    async function findReactState(predicateCode) {
+      try {
+        return await webview.executeJavaScript(`
+          (function() {
+            var predicate = ${predicateCode};
+            var root = document.getElementById('__next');
+            if (!root) return null;
+            var fiberKey = Object.keys(root).find(function(k) { return k.startsWith('__reactFiber'); });
+            if (!fiberKey) return null;
+
+            var fiber = root[fiberKey];
+            var queue = [fiber];
+            var visited = new WeakSet();
+            var maxIter = 50000;
+
+            while (queue.length > 0 && maxIter-- > 0) {
+              var current = queue.shift();
+              if (!current || visited.has(current)) continue;
+              visited.add(current);
+
+              // Check memoizedState chain (hooks)
+              var hook = current.memoizedState;
+              var hookDepth = 0;
+              while (hook && hookDepth < 50) {
+                hookDepth++;
+                if (hook.memoizedState != null) {
+                  try {
+                    var result = predicate(hook.memoizedState);
+                    if (result) return result;
+                  } catch(e) {}
+                }
+                // Also check hook.queue.lastRenderedState
+                if (hook.queue && hook.queue.lastRenderedState != null) {
+                  try {
+                    var result = predicate(hook.queue.lastRenderedState);
+                    if (result) return result;
+                  } catch(e) {}
+                }
+                hook = hook.next;
+              }
+
+              // Check stateNode (class components)
+              if (current.stateNode && current.stateNode !== root && current.stateNode.state) {
+                try {
+                  var result = predicate(current.stateNode.state);
+                  if (result) return result;
+                } catch(e) {}
+              }
+
+              // Traverse: child first, then sibling
+              if (current.child) queue.push(current.child);
+              if (current.sibling) queue.push(current.sibling);
+            }
+            return null;
+          })()
+        `);
+      } catch (e) {
+        console.error('[ReactState] Error:', e);
+        return null;
+      }
+    }
+
+    // Direct lorebook entry reading via React state
+    async function directGetEntries() {
+      try {
+        const entries = await findReactState(`function(state) {
+          // Look for lorebook entries array in state
+          if (!state || typeof state !== 'object') return null;
+
+          // Direct lorebook property
+          var lb = state.lorebook || state.lorebookEntries;
+          if (!lb && state.storyContent) lb = state.storyContent.lorebook;
+          if (!lb && state.story) lb = state.story.lorebook;
+          if (!lb && state.content) lb = state.content.lorebook;
+
+          if (lb) {
+            var entries = lb.entries || lb;
+            if (Array.isArray(entries) && entries.length > 0 && entries[0].text !== undefined) {
+              return entries.map(function(e) {
+                return {
+                  id: e.id || e.uid || '',
+                  displayName: e.displayName || e.name || '',
+                  keys: e.keys || [],
+                  text: e.text || '',
+                  enabled: e.enabled !== false,
+                  category: e.category || null
+                };
+              });
+            }
           }
-        } catch (e) {
-          // Ignore errors during polling
+
+          // Check if state itself is a lorebook entries array
+          if (Array.isArray(state) && state.length > 0 && state[0].displayName !== undefined && state[0].text !== undefined) {
+            return state.map(function(e) {
+              return {
+                id: e.id || e.uid || '',
+                displayName: e.displayName || e.name || '',
+                keys: e.keys || [],
+                text: e.text || '',
+                enabled: e.enabled !== false,
+                category: e.category || null
+              };
+            });
+          }
+
+          return null;
+        }`);
+        if (entries) {
+          console.log('[Direct] Found', entries.length, 'lorebook entries via React state');
         }
+        return entries;
+      } catch (e) {
+        console.error('[Direct] Error getting entries:', e);
+        return null;
+      }
+    }
+
+    // Direct memory reading via React state (falls back to DOM)
+    async function directGetMemory() {
+      // Try DOM first since it's more reliable
+      const domResult = await readMemoryFromDOM();
+      if (domResult !== null) return domResult;
+
+      // Try React state
+      try {
+        const memory = await findReactState(`function(state) {
+          if (!state || typeof state !== 'object') return null;
+          // Look for memory text in story content
+          if (typeof state.memory === 'string') return state.memory;
+          if (state.storyContent && typeof state.storyContent.memory === 'string') return state.storyContent.memory;
+          if (state.story && typeof state.story.memory === 'string') return state.story.memory;
+          if (state.content && typeof state.content.memory === 'string') return state.content.memory;
+          // Memory might be in a context object
+          if (state.context && typeof state.context.memory === 'string') return state.context.memory;
+          return null;
+        }`);
+        if (memory !== null) {
+          console.log('[Direct] Found memory via React state');
+          return memory;
+        }
+      } catch (e) {
+        console.error('[Direct] Error getting memory:', e);
+      }
+      return null;
+    }
+
+    // =========================================================================
+    // UI PANEL PROXY RPC
+    // The proxy scripts register UI panels with text inputs (command channel)
+    // and text displays (response channel). We find these panel elements in
+    // the webview DOM and communicate through them.
+    // =========================================================================
+
+    async function proxyCall(cmdLabel, resPrefix, resEnd, method, args) {
+      const reqId = 'r' + Date.now() + Math.random().toString(36).slice(2, 8);
+      const payload = JSON.stringify({ id: reqId, method, args: args || [] });
+
+      const code = `
+        new Promise(function(resolve, reject) {
+          var CMD_LABEL = ${JSON.stringify(cmdLabel)};
+          var RES_PREFIX = ${JSON.stringify(resPrefix)};
+          var RES_END = ${JSON.stringify(resEnd)};
+          var PAYLOAD = ${JSON.stringify(payload)};
+          var REQ_ID = ${JSON.stringify(reqId)};
+
+          // Find the command input by placeholder or label marker text
+          function findCmdInput() {
+            // Strategy 1: Find input by placeholder attribute
+            var byPlaceholder = document.querySelector('input[placeholder="' + CMD_LABEL + '"], textarea[placeholder="' + CMD_LABEL + '"]');
+            if (byPlaceholder) return byPlaceholder;
+            // Strategy 2: Walk text nodes looking for label text near an input
+            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            var node;
+            while (node = walker.nextNode()) {
+              if (node.textContent.indexOf(CMD_LABEL) !== -1) {
+                var container = node.parentElement;
+                for (var i = 0; i < 10 && container; i++) {
+                  var inputs = container.querySelectorAll('input[type="text"], input:not([type]), textarea');
+                  if (inputs.length > 0) return inputs[0];
+                  container = container.parentElement;
+                }
+              }
+            }
+            return null;
+          }
+
+          // Extract response JSON from the response marker text
+          function readResponse() {
+            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            var node;
+            while (node = walker.nextNode()) {
+              var text = node.textContent;
+              var si = text.indexOf(RES_PREFIX);
+              if (si !== -1) {
+                var cs = si + RES_PREFIX.length;
+                var ei = text.indexOf(RES_END, cs);
+                if (ei !== -1) return text.substring(cs, ei);
+              }
+            }
+            return null;
+          }
+
+          var cmdInput = findCmdInput();
+          if (!cmdInput) { reject(new Error('Proxy panel not found')); return; }
+
+          // Set input value using native setter to trigger the Script API onChange
+          var setter = cmdInput.tagName === 'TEXTAREA'
+            ? Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+            : Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+          setter.call(cmdInput, PAYLOAD);
+          cmdInput.dispatchEvent(new Event('input', { bubbles: true }));
+          cmdInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+          // Poll for our response
+          var polls = 0;
+          function poll() {
+            var raw = readResponse();
+            if (raw && raw.length > 0) {
+              try {
+                var res = JSON.parse(raw);
+                if (res.id === REQ_ID) {
+                  if (res.data && res.data.__error) reject(new Error(res.data.__error));
+                  else resolve(res.data);
+                  return;
+                }
+              } catch(e) { /* not valid JSON yet, keep polling */ }
+            }
+            if (++polls < 150) setTimeout(poll, 100);
+            else reject(new Error('Proxy response timeout (15s)'));
+          }
+          setTimeout(poll, 50);
+        })
+      `;
+
+      return webview.executeJavaScript(code);
+    }
+
+    // Smart wrappers — try proxy first, then direct access fallback
+    async function loreCall(method, ...args) {
+      // Try proxy first if available
+      if (loreProxyReady) {
+        try {
+          return await proxyCall('__LORE_PROXY_CMD__', '__LORE_PROXY_RES__', '__LORE_PROXY_END__', method, args);
+        } catch (e) {
+          console.log('[Lore] Proxy call failed, trying direct:', method, e.message);
+        }
+      }
+      // Direct fallbacks for read operations
+      switch (method) {
+        case 'getStoryText':
+          return await readStoryTextFromDOM() || '';
+        case 'getEntries':
+          return await directGetEntries() || [];
+        case 'createEntry':
+        case 'updateEntry':
+        case 'deleteEntry':
+        case 'createCategory':
+          // Write operations require proxy — no direct fallback yet
+          throw new Error('Proxy not available for write operation: ' + method);
+        default:
+          throw new Error('Unknown lore method: ' + method);
+      }
+    }
+
+    async function memoryCall(method, ...args) {
+      if (memoryProxyReady) {
+        try {
+          return await proxyCall('__MEMORY_PROXY_CMD__', '__MEMORY_PROXY_RES__', '__MEMORY_PROXY_END__', method, args);
+        } catch (e) {
+          console.log('[Memory] Proxy call failed, trying direct:', method, e.message);
+        }
+      }
+      switch (method) {
+        case 'getStoryText':
+          return await readStoryTextFromDOM() || '';
+        case 'getMemory':
+          return await directGetMemory() || '';
+        case 'setMemory':
+          const wrote = await writeMemoryToDOM(args[0]);
+          if (!wrote) throw new Error('Memory textarea not found in DOM');
+          return true;
+        case 'countTokens':
+          return Math.ceil((args[0] || '').length / 4);
+        default:
+          throw new Error('Unknown memory method: ' + method);
+      }
+    }
+
+    // =========================================================================
+    // Proxy status checking — looks for UI panel markers in webview DOM
+    // =========================================================================
+
+    async function checkProxyStatus(cmdLabel, resPrefix) {
+      try {
+        const status = await webview.executeJavaScript(`
+          (function() {
+            var CMD = ${JSON.stringify(cmdLabel)};
+            var RES = ${JSON.stringify(resPrefix)};
+            var foundCmd = false, foundRes = false;
+            // Check placeholder attributes on inputs
+            var byPlaceholder = document.querySelector('input[placeholder="' + CMD + '"], textarea[placeholder="' + CMD + '"]');
+            if (byPlaceholder) foundCmd = true;
+            // Walk text nodes for CMD label and RES marker
+            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            var node;
+            while (node = walker.nextNode()) {
+              if (!foundCmd && node.textContent.indexOf(CMD) !== -1) foundCmd = true;
+              if (node.textContent.indexOf(RES) !== -1) foundRes = true;
+              if (foundCmd && foundRes) return 'ready';
+            }
+            if (foundCmd || foundRes) return 'partial';
+            return 'not-found';
+          })()
+        `);
+        return status;
+      } catch (e) {
+        return 'check-error:' + (e.message || e);
+      }
+    }
+
+    // Load state for current story
+    async function loadLoreState() {
+      if (!currentStoryId) return;
+      loreState = await window.sceneVisualizer.loreGetState(currentStoryId);
+      refreshLoreUI();
+    }
+
+    async function saveLoreState() {
+      if (!currentStoryId || !loreState) return;
+      await window.sceneVisualizer.loreSetState(currentStoryId, loreState);
+    }
+
+    async function checkLoreProxy() {
+      const status = await checkProxyStatus('__LORE_PROXY_CMD__', '__LORE_PROXY_RES__');
+      loreProxyReady = status === 'ready';
+      const loreProxyDot = document.getElementById('loreProxyDot');
+      const loreProxyStatusText = document.getElementById('loreProxyStatusText');
+      if (loreProxyDot && loreProxyStatusText) {
+        if (loreProxyReady) {
+          loreProxyDot.classList.remove('inactive');
+          loreProxyDot.classList.add('active');
+          loreProxyStatusText.textContent = 'Full Access';
+        } else {
+          // Read operations still work via direct mode (React state + DOM)
+          loreProxyDot.classList.remove('active');
+          loreProxyDot.classList.add('inactive');
+          loreProxyStatusText.textContent = 'Read-Only (open Script Manager for writes)';
+        }
+      }
+    }
+
+    // Refresh the lore UI from state
+    function refreshLoreUI() {
+      checkLoreProxy(); // Update proxy status dot
+      if (!loreState) {
+        lorePendingList.innerHTML = '<div class="lore-empty">Select a story to get started.</div>';
+        lorePendingCount.textContent = '(0)';
+        loreMergesSection.style.display = 'none';
+        loreUpdatesSection.style.display = 'none';
+        loreCleanupSection.style.display = 'none';
+        return;
+      }
+
+      const pe = loreState.pendingEntries || [];
+      const pm = loreState.pendingMerges || [];
+      const pu = loreState.pendingUpdates || [];
+
+      lorePendingCount.textContent = `(${pe.length})`;
+      loreMergesCount.textContent = `(${pm.length})`;
+      loreUpdatesCount.textContent = `(${pu.length})`;
+
+      const pc = loreState.pendingCleanups || [];
+
+      loreMergesSection.style.display = pm.length > 0 ? '' : 'none';
+      loreUpdatesSection.style.display = pu.length > 0 ? '' : 'none';
+      loreCleanupSection.style.display = pc.length > 0 ? '' : 'none';
+      loreCleanupCount.textContent = `(${pc.length})`;
+
+      // Render pending cleanups
+      loreCleanupList.innerHTML = '';
+      for (const cleanup of pc) {
+        loreCleanupList.appendChild(createCleanupCard(cleanup));
+      }
+
+      // Render pending entries
+      if (pe.length === 0) {
+        lorePendingList.innerHTML = '<div class="lore-empty">No pending entries. Click "Scan Now" to analyze your story.</div>';
+      } else {
+        lorePendingList.innerHTML = '';
+        for (const entry of pe) {
+          lorePendingList.appendChild(createEntryCard(entry));
+        }
+      }
+
+      // Render pending merges
+      loreMergesList.innerHTML = '';
+      for (const merge of pm) {
+        loreMergesList.appendChild(createMergeCard(merge));
+      }
+
+      // Render pending updates
+      loreUpdatesList.innerHTML = '';
+      for (const update of pu) {
+        loreUpdatesList.appendChild(createUpdateCard(update));
+      }
+    }
+
+    const LORE_CATEGORIES = ['character', 'location', 'item', 'faction', 'concept'];
+
+    function cycleCategoryBadge(badge, getCurrent, onChanged) {
+      const current = getCurrent();
+      const idx = LORE_CATEGORIES.indexOf(current);
+      const next = LORE_CATEGORIES[(idx + 1) % LORE_CATEGORIES.length];
+      badge.className = `category-badge editable ${next}`;
+      badge.textContent = next.toUpperCase();
+      // Update the card's outer class too
+      const card = badge.closest('.lore-card');
+      if (card) {
+        for (const cat of LORE_CATEGORIES) card.classList.remove(cat);
+        card.classList.add(next);
+      }
+      onChanged(next);
+    }
+
+    function createEntryCard(entry) {
+      const card = document.createElement('div');
+      card.className = `lore-card ${entry.category || ''}`;
+      card.dataset.entryId = entry.id;
+
+      const isCharacter = entry.category === 'character';
+      const reformatBtn = isCharacter
+        ? `<button class="btn-reformat" data-action="reformat" data-id="${entry.id}" style="background:#4d96ff;color:#fff;border:none;padding:4px 8px;font-size:10px;border-radius:3px;cursor:pointer;">Reformat</button>`
+        : '';
+
+      card.innerHTML = `
+        <div class="lore-card-header">
+          <span class="category-badge editable ${entry.category || ''}" title="Click to change type">${(entry.category || '').toUpperCase()}</span>
+          <span class="entry-name">${escapeHtml(entry.displayName)}</span>
+        </div>
+        <div class="lore-card-text">${escapeHtml(entry.text)}</div>
+        <div class="lore-card-keys">Keys: ${(entry.keys || []).map(k => escapeHtml(k)).join(', ')}</div>
+        <div class="lore-card-actions">
+          <button class="btn-accept" data-action="accept" data-id="${entry.id}">Accept</button>
+          <button class="btn-edit" data-action="edit" data-id="${entry.id}">Edit</button>
+          ${reformatBtn}
+          <button class="btn-reject" data-action="reject" data-id="${entry.id}">Reject</button>
+        </div>
+      `;
+
+      card.querySelector('.category-badge').addEventListener('click', (e) => {
+        e.stopPropagation();
+        cycleCategoryBadge(e.target, () => entry.category, (newCat) => {
+          entry.category = newCat;
+          saveLoreState();
+        });
+      });
+      card.querySelector('[data-action="accept"]').addEventListener('click', () => acceptEntry(entry.id));
+      card.querySelector('[data-action="reject"]').addEventListener('click', () => rejectEntry(entry.id));
+      card.querySelector('[data-action="edit"]').addEventListener('click', () => editEntry(entry.id, card));
+      if (isCharacter) {
+        card.querySelector('[data-action="reformat"]').addEventListener('click', () => reformatEntry(entry.id));
+      }
+
+      return card;
+    }
+
+    function createMergeCard(merge) {
+      const card = document.createElement('div');
+      card.className = `lore-card ${merge.newCategory || ''}`;
+      card.innerHTML = `
+        <div class="lore-card-header">
+          <span class="category-badge editable ${merge.newCategory || ''}" title="Click to change type">${(merge.newCategory || '').toUpperCase()}</span>
+          <span class="entry-name">${escapeHtml(merge.newName)} &rarr; ${escapeHtml(merge.existingDisplayName)}</span>
+        </div>
+        <div class="lore-card-text">${escapeHtml(merge.proposedText)}</div>
+        <div class="lore-card-keys">Keys: ${(merge.proposedKeys || []).map(k => escapeHtml(k)).join(', ')}</div>
+        <div class="lore-card-actions">
+          <button class="btn-accept" data-action="accept-merge" data-id="${merge.id}">Apply</button>
+          <button class="btn-edit" data-action="edit-merge" data-id="${merge.id}">Edit</button>
+          <button class="btn-reject" data-action="reject-merge" data-id="${merge.id}">Reject</button>
+        </div>
+      `;
+
+      card.querySelector('.category-badge').addEventListener('click', (e) => {
+        e.stopPropagation();
+        cycleCategoryBadge(e.target, () => merge.newCategory, (newCat) => {
+          merge.newCategory = newCat;
+          saveLoreState();
+        });
+      });
+      card.querySelector('[data-action="accept-merge"]').addEventListener('click', () => acceptMerge(merge.id));
+      card.querySelector('[data-action="reject-merge"]').addEventListener('click', () => rejectMerge(merge.id));
+      card.querySelector('[data-action="edit-merge"]').addEventListener('click', () => editMerge(merge.id, card));
+
+      return card;
+    }
+
+    function createUpdateCard(update) {
+      const card = document.createElement('div');
+      card.className = `lore-card ${update.category || ''}`;
+      let typeBadge = '';
+      if (update.isNameUpdate) {
+        typeBadge = ' <span style="font-size:9px;background:#f59e0b;color:#000;padding:1px 5px;border-radius:3px;margin-left:4px;">NAME</span>';
+      } else if (update.isRelationshipUpdate) {
+        typeBadge = ' <span style="font-size:9px;background:#ec4899;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">RELATIONSHIPS</span>';
+      } else if (update.isReformat) {
+        typeBadge = ' <span style="font-size:9px;background:#a855f7;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">ENRICHED</span>';
+      }
+      const nameReasonHtml = update.nameReason
+        ? `<div style="font-size:11px;color:#f59e0b;margin:4px 8px;">${escapeHtml(update.nameReason)}</div>`
+        : '';
+      card.innerHTML = `
+        <div class="lore-card-header">
+          <span class="category-badge editable ${update.category || ''}" title="Click to change type">${(update.category || '').toUpperCase()}</span>
+          <span class="entry-name">${escapeHtml(update.displayName)}${typeBadge}</span>
+        </div>
+        ${nameReasonHtml}
+        <div class="lore-diff">
+          <div class="lore-diff-col"><h5>Current</h5><div>${escapeHtml(update.originalText)}</div></div>
+          <div class="lore-diff-col"><h5>Proposed</h5><div>${escapeHtml(update.updatedText)}</div></div>
+        </div>
+        <div class="lore-card-actions">
+          <button class="btn-accept" data-action="accept-update" data-id="${update.id}">Apply</button>
+          <button class="btn-edit" data-action="edit-update" data-id="${update.id}">Edit</button>
+          <button class="btn-reject" data-action="dismiss-update" data-id="${update.id}">Dismiss</button>
+        </div>
+      `;
+
+      card.querySelector('.category-badge').addEventListener('click', (e) => {
+        e.stopPropagation();
+        cycleCategoryBadge(e.target, () => update.category, (newCat) => {
+          update.category = newCat;
+          saveLoreState();
+        });
+      });
+      card.querySelector('[data-action="accept-update"]').addEventListener('click', () => acceptUpdate(update.id));
+      card.querySelector('[data-action="dismiss-update"]').addEventListener('click', () => dismissUpdate(update.id));
+      card.querySelector('[data-action="edit-update"]').addEventListener('click', () => editUpdate(update.id, card));
+
+      return card;
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // Scan action — dropdown menu
+    const loreScanMenu = document.getElementById('loreScanMenu');
+    let scanMenuOpen = false;
+
+    loreScanBtn.addEventListener('click', (e) => {
+      if (loreIsScanning) return;
+      scanMenuOpen = !scanMenuOpen;
+      loreScanMenu.style.display = scanMenuOpen ? '' : 'none';
+    });
+
+    // Close menu when clicking outside
+    document.addEventListener('click', (e) => {
+      if (scanMenuOpen && !loreScanBtn.contains(e.target) && !loreScanMenu.contains(e.target)) {
+        scanMenuOpen = false;
+        loreScanMenu.style.display = 'none';
+      }
+    });
+
+    // Dropdown items trigger scan with specific type
+    loreScanMenu.querySelectorAll('button[data-scan]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        scanMenuOpen = false;
+        loreScanMenu.style.display = 'none';
+        runLoreScan(btn.dataset.scan);
+      });
+    });
+
+    async function runLoreScan(scanType = 'all') {
+      if (loreIsScanning || !currentStoryId) return;
+
+      loreIsScanning = true;
+      loreScanBtn.disabled = true;
+      loreScanStatus.style.display = '';
+      loreError.style.display = 'none';
+
+      try {
+        // Get story text (smart: proxy → DOM fallback)
+        await checkLoreProxy();
+        let storyText = await loreCall('getStoryText');
+
+        if (!storyText || storyText.trim().length < 100) {
+          showLoreError('Not enough story content to analyze (need at least 100 characters).');
+          return;
+        }
+
+        // Get existing entries (smart: proxy → direct React state fallback)
+        let existingEntries = await loreCall('getEntries');
+
+        // Build scan options based on type
+        const scanOptions = {};
+        if (scanType === 'relationships') {
+          scanOptions.relationshipsOnly = true;
+        } else if (scanType !== 'all') {
+          scanOptions.categoryFilter = scanType;
+        }
+
+        const result = await window.sceneVisualizer.loreScan(storyText, existingEntries, currentStoryId, scanOptions);
+
+        if (result.success) {
+          loreState = result.state;
+          await saveLoreState();
+          loreLastStoryLength = storyText.length;
+
+          if (result.noResults) {
+            showToast('No new lore elements found');
+          } else if (result.summary) {
+            const parts = [];
+            if (result.summary.generated > 0) parts.push(`${result.summary.generated} entries`);
+            if (result.summary.mergesFound > 0) parts.push(`${result.summary.mergesFound} merges`);
+            if (result.summary.updatesFound > 0) parts.push(`${result.summary.updatesFound} updates`);
+            if (result.summary.relationshipUpdatesFound > 0) parts.push(`${result.summary.relationshipUpdatesFound} relationship updates`);
+            if (result.summary.nameProposals > 0) parts.push(`${result.summary.nameProposals} name updates`);
+            showToast(`Found ${parts.join(' and ')}`);
+          }
+        } else {
+          showLoreError(result.error || 'Scan failed');
+        }
+      } catch (e) {
+        showLoreError(e.message || 'Scan failed');
+      } finally {
+        loreIsScanning = false;
+        loreScanBtn.disabled = false;
+        loreScanStatus.style.display = 'none';
+        refreshLoreUI();
+        buildFamilyTree();
+      }
+    }
+
+    // Scan progress listener
+    window.sceneVisualizer.onLoreScanProgress((progress) => {
+      const phaseLabels = {
+        identifying: 'Identifying elements...',
+        generating: 'Generating entries...',
+        'processing-merges': 'Processing merges...',
+        'checking-updates': 'Checking for updates...',
+        'updating-relationships': 'Updating relationships...',
+        'enriching': 'Enriching character details...',
+        'propagating-names': 'Propagating family names...',
+      };
+      loreScanPhase.textContent = phaseLabels[progress.phase] || 'Scanning...';
+
+      // Live update pending entries as they come in
+      if (progress.pendingEntries) {
+        if (!loreState) loreState = { pendingEntries: [], pendingMerges: [], pendingUpdates: [], acceptedEntryIds: [], rejectedNames: [], dismissedUpdateNames: [], rejectedMergeNames: [], charsSinceLastScan: 0, loreCategoryIds: {}, pendingCleanups: [], dismissedCleanupIds: [] };
+        loreState.pendingEntries = progress.pendingEntries;
+        refreshLoreUI();
+      }
+    });
+
+    // --- Organize Feature ---
+    let loreIsOrganizing = false;
+
+    loreOrganizeBtn.addEventListener('click', () => runLoreOrganize());
+
+    async function runLoreOrganize() {
+      if (loreIsOrganizing || loreIsScanning || !currentStoryId) return;
+
+      loreIsOrganizing = true;
+      loreOrganizeBtn.disabled = true;
+      loreScanStatus.style.display = '';
+      loreScanPhase.textContent = 'Organizing...';
+      loreError.style.display = 'none';
+
+      try {
+        await checkLoreProxy();
+        let storyText = await loreCall('getStoryText');
+        let entries = await loreCall('getEntries');
+
+        if (!entries || entries.length === 0) {
+          showLoreError('No lorebook entries to organize.');
+          return;
+        }
+
+        // Build reverse categoryMap from loreCategoryIds
+        if (!loreState) loreState = { pendingEntries: [], pendingMerges: [], pendingUpdates: [], acceptedEntryIds: [], rejectedNames: [], dismissedUpdateNames: [], rejectedMergeNames: [], charsSinceLastScan: 0, loreCategoryIds: {}, pendingCleanups: [], dismissedCleanupIds: [] };
+        const categoryMap = {};
+        for (const [catName, catId] of Object.entries(loreState.loreCategoryIds || {})) {
+          if (catId) categoryMap[catId] = catName;
+        }
+
+        const result = await window.sceneVisualizer.loreOrganize(
+          entries, storyText || '', currentStoryId, categoryMap
+        );
+
+        if (result.success) {
+          if (!loreState.pendingCleanups) loreState.pendingCleanups = [];
+          if (!loreState.dismissedCleanupIds) loreState.dismissedCleanupIds = [];
+          loreState.pendingCleanups = result.cleanups || [];
+          await saveLoreState();
+
+          if (result.cleanups && result.cleanups.length > 0) {
+            showToast(`Found ${result.cleanups.length} cleanup suggestions`);
+          } else {
+            showToast('Lorebook is already well-organized');
+          }
+        } else {
+          showLoreError(result.error || 'Organize failed');
+        }
+      } catch (e) {
+        showLoreError(e.message || 'Organize failed');
+      } finally {
+        loreIsOrganizing = false;
+        loreOrganizeBtn.disabled = false;
+        loreScanStatus.style.display = 'none';
+        refreshLoreUI();
+      }
+    }
+
+    // Organize progress listener
+    window.sceneVisualizer.onLoreOrganizeProgress((progress) => {
+      const phaseLabels = {
+        classifying: 'Classifying entries...',
+        'classifying-llm': 'Classifying (LLM)...',
+        deduplicating: 'Finding duplicates...',
+        'confirming-duplicates': 'Confirming duplicates...',
+        recategorizing: 'Checking categories...',
+      };
+      loreScanPhase.textContent = phaseLabels[progress.phase] || 'Organizing...';
+    });
+
+    function createCleanupCard(cleanup) {
+      const card = document.createElement('div');
+      card.className = 'lore-card cleanup';
+      card.dataset.cleanupId = cleanup.id;
+
+      if (cleanup.type === 'duplicate') {
+        card.innerHTML = `
+          <div class="lore-card-header">
+            <span class="category-badge cleanup">DUPLICATE</span>
+            <span class="entry-name">${cleanup.keepEntry.displayName} + ${cleanup.removeEntry.displayName}</span>
+          </div>
+          <div class="cleanup-comparison">
+            <div class="cleanup-col">
+              <h5>Keep: ${cleanup.keepEntry.displayName}</h5>
+              <div class="cleanup-text">${cleanup.keepEntry.text.slice(0, 200)}</div>
+            </div>
+            <div class="cleanup-col">
+              <h5>Remove: ${cleanup.removeEntry.displayName}</h5>
+              <div class="cleanup-text">${cleanup.removeEntry.text.slice(0, 200)}</div>
+            </div>
+          </div>
+          <div style="font-size:10px;color:#f59e0b;margin-bottom:6px;">${cleanup.reason || ''}</div>
+          <div class="lore-card-actions">
+            <button class="btn-accept" data-action="accept-cleanup">Merge</button>
+            <button class="btn-reject" data-action="reject-cleanup">Dismiss</button>
+          </div>
+        `;
+      } else {
+        // recategorize or legacy-move
+        const label = cleanup.type === 'legacy-move' ? 'UNCATEGORIZED' : 'MISPLACED';
+        card.innerHTML = `
+          <div class="lore-card-header">
+            <span class="category-badge cleanup">${label}</span>
+            <span class="entry-name">${cleanup.displayName}</span>
+          </div>
+          <div style="font-size:11px;color:#bbb;margin-bottom:8px;">
+            <span style="color:#888;">${cleanup.currentCategory}</span>
+            <span class="cleanup-arrow"> → </span>
+            <span style="color:#f59e0b;">${cleanup.proposedCategory}</span>
+          </div>
+          <div class="lore-card-actions">
+            <button class="btn-accept" data-action="accept-cleanup">Move</button>
+            <button class="btn-reject" data-action="reject-cleanup">Dismiss</button>
+          </div>
+        `;
+      }
+
+      card.querySelector('[data-action="accept-cleanup"]').addEventListener('click', () => acceptCleanup(cleanup.id));
+      card.querySelector('[data-action="reject-cleanup"]').addEventListener('click', () => rejectCleanup(cleanup.id));
+
+      return card;
+    }
+
+    async function acceptCleanup(cleanupId) {
+      if (!loreState || !loreState.pendingCleanups) return;
+      const idx = loreState.pendingCleanups.findIndex(c => c.id === cleanupId);
+      if (idx === -1) return;
+      const cleanup = loreState.pendingCleanups[idx];
+
+      await checkLoreProxy();
+      if (!loreProxyReady) {
+        showToast('Open Script Manager to enable lorebook writes');
+        return;
+      }
+
+      if (cleanup.type === 'duplicate') {
+        // Update keep entry with merged text/keys
+        const entries = await loreCall('getEntries');
+        const keepEntry = entries.find(e => e.id === cleanup.keepEntry.id || e.displayName.toLowerCase() === cleanup.keepEntry.displayName.toLowerCase());
+        const removeEntry = entries.find(e => e.id === cleanup.removeEntry.id || e.displayName.toLowerCase() === cleanup.removeEntry.displayName.toLowerCase());
+
+        if (keepEntry) {
+          await loreCall('updateEntry', keepEntry.id, {
+            text: cleanup.mergedText,
+            keys: cleanup.mergedKeys,
+          });
+        }
+        if (removeEntry) {
+          await loreCall('deleteEntry', removeEntry.id);
+        }
+        showToast(`Merged "${cleanup.removeEntry.displayName}" into "${cleanup.keepEntry.displayName}"`);
+      } else {
+        // recategorize or legacy-move
+        const catId = cleanup.proposedCategoryId || await getCategoryForType(cleanup.proposedType);
+        if (catId) {
+          await loreCall('updateEntry', cleanup.entryId, { category: catId });
+          showToast(`Moved "${cleanup.displayName}" to ${cleanup.proposedCategory}`);
+        } else {
+          showToast(`Could not find/create category "${cleanup.proposedCategory}"`);
+        }
+      }
+
+      loreState.pendingCleanups.splice(idx, 1);
+      await saveLoreState();
+      refreshLoreUI();
+      buildFamilyTree();
+    }
+
+    async function rejectCleanup(cleanupId) {
+      if (!loreState || !loreState.pendingCleanups) return;
+      const idx = loreState.pendingCleanups.findIndex(c => c.id === cleanupId);
+      if (idx === -1) return;
+      const cleanup = loreState.pendingCleanups[idx];
+
+      loreState.pendingCleanups.splice(idx, 1);
+      if (!loreState.dismissedCleanupIds) loreState.dismissedCleanupIds = [];
+      loreState.dismissedCleanupIds.push(cleanup.id);
+      await saveLoreState();
+      refreshLoreUI();
+    }
+
+    loreCleanupApplyAllBtn.addEventListener('click', async () => {
+      if (!loreState || !loreState.pendingCleanups || loreState.pendingCleanups.length === 0) return;
+
+      loreCleanupApplyAllBtn.disabled = true;
+      const ids = loreState.pendingCleanups.map(c => c.id);
+      for (const id of ids) {
+        await acceptCleanup(id);
+      }
+      loreCleanupApplyAllBtn.disabled = false;
+    });
+
+    function showLoreError(msg) {
+      loreError.textContent = msg;
+      loreError.style.display = '';
+    }
+
+    // Category naming map: entry type → lorebook category name
+    const CATEGORY_NAMES = {
+      character: 'Characters',
+      location: 'Locations',
+      item: 'Items',
+      faction: 'Factions',
+      concept: 'Concepts',
+    };
+
+    // Get or create a lorebook category for an entry type
+    async function getCategoryForType(entryType) {
+      if (!loreState) return undefined;
+      // Migrate old single-category format
+      if (loreState.loreCategoryId && !loreState.loreCategoryIds) {
+        loreState.loreCategoryIds = {};
+      }
+      if (!loreState.loreCategoryIds) loreState.loreCategoryIds = {};
+
+      const catName = CATEGORY_NAMES[entryType] || 'Lore Creator';
+      if (loreState.loreCategoryIds[catName]) return loreState.loreCategoryIds[catName];
+
+      try {
+        const catId = await loreCall('createCategory', { name: catName });
+        if (catId) {
+          loreState.loreCategoryIds[catName] = catId;
+          return catId;
+        }
+      } catch (e) {
+        console.error('[Lore] Failed to create category:', catName, e.message);
+      }
+      return undefined;
+    }
+
+    // Accept entry: write to lorebook via proxy
+    async function acceptEntry(entryId) {
+      if (!loreState) return;
+      const idx = loreState.pendingEntries.findIndex(e => e.id === entryId);
+      if (idx === -1) return;
+
+      const entry = loreState.pendingEntries[idx];
+
+      // Write to lorebook via proxy (required for writes)
+      let success = false;
+      await checkLoreProxy();
+
+      // Duplicate guard: check if entry already exists in lorebook
+      try {
+        const currentEntries = await loreCall('getEntries');
+        const newNameLower = entry.displayName.toLowerCase();
+        const duplicate = currentEntries.find(e => {
+          const n = (e.displayName || '').toLowerCase();
+          return n && (n === newNameLower || n.includes(newNameLower) || newNameLower.includes(n));
+        });
+        if (duplicate) {
+          if (!confirm(`"${duplicate.displayName}" already exists in lorebook. Create separate entry for "${entry.displayName}"?`)) {
+            showToast(`Skipped "${entry.displayName}"`);
+            return;
+          }
+        }
+      } catch (e) { /* proceed on error */ }
+
+      try {
+        const categoryId = await getCategoryForType(entry.category);
+
+        const entryData = {
+          displayName: entry.displayName,
+          keys: entry.keys,
+          text: entry.text,
+          category: categoryId,
+        };
+        const lorebookId = await loreCall('createEntry', entryData);
+        success = !!lorebookId;
+        if (lorebookId) loreState.acceptedEntryIds.push(lorebookId);
+      } catch (e) {
+        console.error('[Lore] Write failed:', e.message);
+      }
+
+      if (success) {
+        loreState.pendingEntries.splice(idx, 1);
+        await saveLoreState();
+        showToast(`Added "${entry.displayName}" to lorebook`);
+      } else {
+        showToast(`Failed to write "${entry.displayName}" — open Script Manager to enable proxy`);
+      }
+      refreshLoreUI();
+    }
+
+    // Reject entry
+    async function rejectEntry(entryId) {
+      if (!loreState) return;
+      const idx = loreState.pendingEntries.findIndex(e => e.id === entryId);
+      if (idx === -1) return;
+
+      const entry = loreState.pendingEntries[idx];
+      loreState.pendingEntries.splice(idx, 1);
+      loreState.rejectedNames.push(entry.displayName);
+      await saveLoreState();
+      showToast(`Rejected "${entry.displayName}"`);
+      refreshLoreUI();
+    }
+
+    // Edit entry (inline)
+    function editEntry(entryId, card) {
+      const entry = (loreState.pendingEntries || []).find(e => e.id === entryId);
+      if (!entry) return;
+
+      const textDiv = card.querySelector('.lore-card-text');
+      const currentText = entry.text;
+
+      const textarea = document.createElement('textarea');
+      textarea.className = 'lore-edit-area';
+      textarea.value = currentText;
+      textDiv.replaceWith(textarea);
+
+      const actions = card.querySelector('.lore-card-actions');
+      actions.innerHTML = `
+        <button class="btn-accept">Save</button>
+        <button class="btn-reject">Cancel</button>
+      `;
+      actions.querySelector('.btn-accept').addEventListener('click', async () => {
+        entry.text = textarea.value;
+        await saveLoreState();
+        refreshLoreUI();
+      });
+      actions.querySelector('.btn-reject').addEventListener('click', () => refreshLoreUI());
+    }
+
+    // Accept all entries
+    loreAcceptAllBtn.addEventListener('click', async () => {
+      if (!loreState || loreState.pendingEntries.length === 0) return;
+
+      loreAcceptAllBtn.disabled = true;
+      const entries = [...loreState.pendingEntries];
+      let accepted = 0;
+
+      await checkLoreProxy();
+      if (!loreProxyReady) {
+        showToast('Open Script Manager to enable lorebook writes');
+        loreAcceptAllBtn.disabled = false;
+        return;
+      }
+
+      // Fetch existing entries once for duplicate detection
+      let existingNames = new Set();
+      let skipped = 0;
+      try {
+        const currentEntries = await loreCall('getEntries');
+        for (const e of currentEntries) {
+          if (e.displayName) existingNames.add(e.displayName.toLowerCase());
+        }
+      } catch (e) { /* proceed without dedup on error */ }
+
+      for (const entry of entries) {
+        // Silently skip duplicates in Accept All
+        const newNameLower = entry.displayName.toLowerCase();
+        const isDuplicate = [...existingNames].some(n =>
+          n === newNameLower || n.includes(newNameLower) || newNameLower.includes(n)
+        );
+        if (isDuplicate) {
+          skipped++;
+          continue;
+        }
+
+        const categoryId = await getCategoryForType(entry.category);
+        const entryData = {
+          displayName: entry.displayName,
+          keys: entry.keys,
+          text: entry.text,
+          category: categoryId,
+        };
+        const lorebookId = await loreCall('createEntry', entryData);
+        if (lorebookId) {
+          loreState.acceptedEntryIds.push(lorebookId);
+          existingNames.add(newNameLower);
+          accepted++;
+        }
+      }
+
+      loreState.pendingEntries = [];
+      await saveLoreState();
+      const msg = skipped > 0
+        ? `Accepted ${accepted} entries (${skipped} duplicates skipped)`
+        : `Accepted ${accepted} entries`;
+      showToast(msg);
+      loreAcceptAllBtn.disabled = false;
+      refreshLoreUI();
+    });
+
+    // Clear all pending
+    loreClearBtn.addEventListener('click', async () => {
+      if (!loreState) return;
+      loreState.pendingEntries = [];
+      loreState.pendingMerges = [];
+      loreState.pendingUpdates = [];
+      await saveLoreState();
+      showToast('Pending items cleared');
+      refreshLoreUI();
+    });
+
+    // Accept merge
+    async function acceptMerge(mergeId) {
+      if (!loreState) return;
+      const idx = loreState.pendingMerges.findIndex(m => m.id === mergeId);
+      if (idx === -1) return;
+      const merge = loreState.pendingMerges[idx];
+
+      await checkLoreProxy();
+      if (!loreProxyReady) {
+        showToast('Open Script Manager to enable lorebook writes');
+        return;
+      }
+
+      // Find existing entry by display name
+      const entries = await loreCall('getEntries');
+      const existing = entries.find(e => e.displayName.toLowerCase() === merge.existingDisplayName.toLowerCase());
+      if (!existing) {
+        showToast(`Entry "${merge.existingDisplayName}" not found in lorebook`);
+        loreState.pendingMerges.splice(idx, 1);
+        await saveLoreState();
+        refreshLoreUI();
+        return;
+      }
+
+      const mergePayload = {
+          displayName: merge.proposedDisplayName,
+          keys: merge.proposedKeys,
+          text: merge.proposedText,
+        };
+      if (merge.newCategory) {
+        const catId = await getCategoryForType(merge.newCategory);
+        if (catId) mergePayload.category = catId;
+      }
+      const success = await loreCall('updateEntry', existing.id, mergePayload);
+
+      if (success) {
+        loreState.pendingMerges.splice(idx, 1);
+        await saveLoreState();
+        showToast(`Merged "${merge.newName}" into "${merge.proposedDisplayName}"`);
+      } else {
+        showToast('Merge failed');
+      }
+      refreshLoreUI();
+      buildFamilyTree();
+    }
+
+    // Reject merge
+    async function rejectMerge(mergeId) {
+      if (!loreState) return;
+      const idx = loreState.pendingMerges.findIndex(m => m.id === mergeId);
+      if (idx === -1) return;
+      const merge = loreState.pendingMerges[idx];
+      loreState.pendingMerges.splice(idx, 1);
+      loreState.rejectedMergeNames.push(`${merge.newName.toLowerCase()}->${merge.existingDisplayName.toLowerCase()}`);
+      await saveLoreState();
+      refreshLoreUI();
+    }
+
+    // Edit merge (inline)
+    function editMerge(mergeId, card) {
+      const merge = (loreState.pendingMerges || []).find(m => m.id === mergeId);
+      if (!merge) return;
+
+      const textDiv = card.querySelector('.lore-card-text');
+      const textarea = document.createElement('textarea');
+      textarea.className = 'lore-edit-area';
+      textarea.value = merge.proposedText;
+      textDiv.replaceWith(textarea);
+
+      const actions = card.querySelector('.lore-card-actions');
+      actions.innerHTML = `
+        <button class="btn-accept">Save</button>
+        <button class="btn-reject">Cancel</button>
+      `;
+      actions.querySelector('.btn-accept').addEventListener('click', async () => {
+        merge.proposedText = textarea.value;
+        await saveLoreState();
+        refreshLoreUI();
+      });
+      actions.querySelector('.btn-reject').addEventListener('click', () => refreshLoreUI());
+    }
+
+    // Accept update
+    async function acceptUpdate(updateId) {
+      if (!loreState) return;
+      const idx = loreState.pendingUpdates.findIndex(u => u.id === updateId);
+      if (idx === -1) return;
+      const update = loreState.pendingUpdates[idx];
+
+      await checkLoreProxy();
+      if (!loreProxyReady) {
+        showToast('Open Script Manager to enable lorebook writes');
+        return;
+      }
+
+      const entries = await loreCall('getEntries');
+      const existing = entries.find(e => e.displayName.toLowerCase() === update.displayName.toLowerCase());
+      if (!existing) {
+        showToast(`Entry "${update.displayName}" not found`);
+        loreState.pendingUpdates.splice(idx, 1);
+        await saveLoreState();
+        refreshLoreUI();
+        return;
+      }
+
+      const updatePayload = { text: update.updatedText };
+      // If this is a name update, also update the displayName in the lorebook
+      if (update.isNameUpdate && update.proposedDisplayName) {
+        updatePayload.displayName = update.proposedDisplayName;
+      }
+      if (update.category) {
+        const catId = await getCategoryForType(update.category);
+        if (catId) updatePayload.category = catId;
+      }
+
+      const success = await loreCall('updateEntry', existing.id, updatePayload);
+
+      if (success) {
+        loreState.pendingUpdates.splice(idx, 1);
+        await saveLoreState();
+        showToast(`Updated "${update.proposedDisplayName || update.displayName}"`);
+      } else {
+        showToast('Update failed');
+      }
+      refreshLoreUI();
+      buildFamilyTree();
+    }
+
+    // Dismiss update
+    async function dismissUpdate(updateId) {
+      if (!loreState) return;
+      const idx = loreState.pendingUpdates.findIndex(u => u.id === updateId);
+      if (idx === -1) return;
+      const update = loreState.pendingUpdates[idx];
+      loreState.pendingUpdates.splice(idx, 1);
+      loreState.dismissedUpdateNames.push(update.displayName);
+      if (update.isReformat) {
+        if (!loreState.dismissedReformatNames) loreState.dismissedReformatNames = [];
+        loreState.dismissedReformatNames.push(update.displayName);
+      }
+      await saveLoreState();
+      refreshLoreUI();
+    }
+
+    // Edit update (inline)
+    function editUpdate(updateId, card) {
+      const update = (loreState.pendingUpdates || []).find(u => u.id === updateId);
+      if (!update) return;
+
+      const diffDiv = card.querySelector('.lore-diff');
+      const textarea = document.createElement('textarea');
+      textarea.className = 'lore-edit-area';
+      textarea.value = update.updatedText;
+      diffDiv.replaceWith(textarea);
+
+      const actions = card.querySelector('.lore-card-actions');
+      actions.innerHTML = `
+        <button class="btn-accept">Save</button>
+        <button class="btn-reject">Cancel</button>
+      `;
+      actions.querySelector('.btn-accept').addEventListener('click', async () => {
+        update.updatedText = textarea.value;
+        await saveLoreState();
+        refreshLoreUI();
+      });
+      actions.querySelector('.btn-reject').addEventListener('click', () => refreshLoreUI());
+    }
+
+    // Enrich entry
+    loreEnrichBtn.addEventListener('click', () => runEnrich());
+
+    loreEnrichInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') runEnrich();
+    });
+
+    async function runEnrich() {
+      const prompt = loreEnrichInput.value.trim();
+      if (!prompt) return;
+
+      loreEnrichBtn.disabled = true;
+      loreEnrichBtn.textContent = '...';
+      loreEnrichPreview.style.display = 'none';
+
+      try {
+        // Get entries for target identification (loreCall falls back to direct access)
+        let entries = [];
+        try {
+          entries = await loreCall('getEntries');
+        } catch (e) {
+          console.log('[LoreEnrich] Failed to get entries:', e.message);
+        }
+
+        if (entries.length === 0) {
+          showLoreError('No lorebook entries found. Create some entries first.');
+          return;
+        }
+
+        // Pass 1: Identify target
+        const identifyResult = await window.sceneVisualizer.loreIdentifyTarget(prompt, entries);
+        if (!identifyResult.success || !identifyResult.result || identifyResult.result.confidence < 2) {
+          showLoreError('Could not identify which entry to update. Try mentioning the entry name.');
+          return;
+        }
+
+        const targetEntry = identifyResult.result.entry;
+
+        // Pass 2: Generate enriched text
+        const enrichResult = await window.sceneVisualizer.loreGenerateEnriched(
+          prompt,
+          targetEntry.text || '',
+          targetEntry.displayName
+        );
+
+        if (!enrichResult.success || !enrichResult.result) {
+          showLoreError('Failed to generate updated text.');
+          return;
+        }
+
+        // Show preview
+        loreEnrichResult = {
+          entry: targetEntry,
+          originalText: targetEntry.text || '',
+          updatedText: enrichResult.result,
+          displayName: targetEntry.displayName,
+        };
+
+        loreEnrichTarget.textContent = targetEntry.displayName;
+        loreEnrichOld.textContent = targetEntry.text || '(empty)';
+        loreEnrichNew.textContent = enrichResult.result;
+        loreEnrichPreview.style.display = '';
+      } catch (e) {
+        showLoreError(e.message || 'Enrich failed');
+      } finally {
+        loreEnrichBtn.disabled = false;
+        loreEnrichBtn.textContent = 'Enrich';
+      }
+    }
+
+    loreEnrichAcceptBtn.addEventListener('click', async () => {
+      if (!loreEnrichResult) return;
+
+      await checkLoreProxy();
+      if (!loreProxyReady) {
+        showToast('Open Script Manager to enable lorebook writes');
+        return;
+      }
+
+      const success = await loreCall('updateEntry', loreEnrichResult.entry.id, { text: loreEnrichResult.updatedText });
+
+      if (success) {
+        showToast(`Updated "${loreEnrichResult.displayName}"`);
+      } else {
+        showToast('Failed to update entry');
+      }
+
+      loreEnrichResult = null;
+      loreEnrichPreview.style.display = 'none';
+      loreEnrichInput.value = '';
+    });
+
+    loreEnrichEditBtn.addEventListener('click', () => {
+      if (!loreEnrichResult) return;
+      const textarea = document.createElement('textarea');
+      textarea.className = 'lore-edit-area';
+      textarea.value = loreEnrichResult.updatedText;
+      loreEnrichNew.innerHTML = '';
+      loreEnrichNew.appendChild(textarea);
+
+      loreEnrichEditBtn.style.display = 'none';
+      textarea.addEventListener('input', () => {
+        loreEnrichResult.updatedText = textarea.value;
+      });
+    });
+
+    loreEnrichRejectBtn.addEventListener('click', () => {
+      loreEnrichResult = null;
+      loreEnrichPreview.style.display = 'none';
+    });
+
+    // ---- Create Entry ----
+    let loreCreateResults = []; // array of generated entries
+
+    loreCreateBtn.addEventListener('click', () => runLoreCreate());
+
+    loreCreateInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runLoreCreate(); }
+    });
+
+    async function runLoreCreate() {
+      const prompt = loreCreateInput.value.trim();
+      if (!prompt || !currentStoryId) return;
+
+      loreCreateBtn.disabled = true;
+      loreCreateBtn.textContent = '...';
+      loreCreatePreview.style.display = 'none';
+      loreCreateResults = [];
+
+      try {
+        // Get story text (smart fallback)
+        await checkLoreProxy();
+        let storyText = await loreCall('getStoryText');
+
+        const category = loreCreateCategory.value;
+        const result = await window.sceneVisualizer.loreCreateFromPrompt(prompt, category, storyText, currentStoryId);
+
+        if (result.success && result.entries && result.entries.length > 0) {
+          loreCreateResults = result.entries;
+          renderCreatePreview();
+        } else {
+          showToast(result.error || 'No entries generated');
+        }
+      } catch (e) {
+        showToast('Create failed: ' + (e.message || 'Unknown error'));
+      } finally {
+        loreCreateBtn.disabled = false;
+        loreCreateBtn.textContent = 'Create';
+      }
+    }
+
+    function renderCreatePreview() {
+      loreCreatePreview.innerHTML = '';
+      loreCreatePreview.style.display = '';
+
+      // Accept All button if multiple entries
+      if (loreCreateResults.length > 1) {
+        const acceptAllBar = document.createElement('div');
+        acceptAllBar.className = 'lore-create-accept-all';
+        const acceptAllBtn = document.createElement('button');
+        acceptAllBtn.textContent = `Accept All (${loreCreateResults.length})`;
+        acceptAllBtn.addEventListener('click', async () => {
+          for (const entry of [...loreCreateResults]) {
+            await acceptCreatedEntry(entry);
+          }
+          loreCreateResults = [];
+          loreCreatePreview.style.display = 'none';
+          loreCreateInput.value = '';
+        });
+        acceptAllBar.appendChild(acceptAllBtn);
+        loreCreatePreview.appendChild(acceptAllBar);
+      }
+
+      for (const entry of loreCreateResults) {
+        loreCreatePreview.appendChild(createCreatedEntryCard(entry));
+      }
+    }
+
+    function createCreatedEntryCard(entry) {
+      const card = document.createElement('div');
+      card.className = `lore-card ${entry.category || ''}`;
+      card.dataset.createId = entry.id;
+      card.innerHTML = `
+        <div class="lore-card-header">
+          <span class="category-badge ${entry.category || ''}">${(entry.category || '').toUpperCase()}</span>
+          <span class="entry-name">${escapeHtml(entry.displayName)}</span>
+        </div>
+        <div class="lore-card-text">${escapeHtml(entry.text)}</div>
+        <div class="lore-card-keys">Keys: ${(entry.keys || []).map(k => escapeHtml(k)).join(', ')}</div>
+        <div class="lore-card-actions">
+          <button class="btn-accept">Accept</button>
+          <button class="btn-edit">Edit</button>
+          <button class="btn-reject">Reject</button>
+        </div>
+      `;
+
+      card.querySelector('.btn-accept').addEventListener('click', async () => {
+        await acceptCreatedEntry(entry);
+        loreCreateResults = loreCreateResults.filter(e => e.id !== entry.id);
+        if (loreCreateResults.length === 0) {
+          loreCreatePreview.style.display = 'none';
+          loreCreateInput.value = '';
+        } else {
+          renderCreatePreview();
+        }
+      });
+
+      card.querySelector('.btn-edit').addEventListener('click', () => {
+        const textDiv = card.querySelector('.lore-card-text');
+        const textarea = document.createElement('textarea');
+        textarea.className = 'lore-edit-area';
+        textarea.value = entry.text;
+        textDiv.replaceWith(textarea);
+
+        const actions = card.querySelector('.lore-card-actions');
+        actions.innerHTML = '<button class="btn-accept">Save</button><button class="btn-reject">Cancel</button>';
+        actions.querySelector('.btn-accept').addEventListener('click', () => {
+          entry.text = textarea.value;
+          renderCreatePreview();
+        });
+        actions.querySelector('.btn-reject').addEventListener('click', () => renderCreatePreview());
+      });
+
+      card.querySelector('.btn-reject').addEventListener('click', () => {
+        loreCreateResults = loreCreateResults.filter(e => e.id !== entry.id);
+        if (loreCreateResults.length === 0) {
+          loreCreatePreview.style.display = 'none';
+        } else {
+          renderCreatePreview();
+        }
+      });
+
+      return card;
+    }
+
+    async function acceptCreatedEntry(entry) {
+      let success = false;
+      await checkLoreProxy();
+      if (loreProxyReady) {
+        if (!loreState) {
+          loreState = { pendingEntries: [], pendingMerges: [], pendingUpdates: [], acceptedEntryIds: [], rejectedNames: [], dismissedUpdateNames: [], rejectedMergeNames: [], charsSinceLastScan: 0, loreCategoryIds: {}, pendingCleanups: [], dismissedCleanupIds: [] };
+        }
+        const categoryId = await getCategoryForType(entry.category);
+
+        const entryData = {
+          displayName: entry.displayName,
+          keys: entry.keys,
+          text: entry.text,
+          category: categoryId,
+        };
+        const lorebookId = await loreCall('createEntry', entryData);
+        success = !!lorebookId;
+        if (lorebookId) loreState.acceptedEntryIds.push(lorebookId);
+      }
+
+      if (success) {
+        await saveLoreState();
+        showToast(`Added "${entry.displayName}" to lorebook`);
+      } else {
+        showToast(`Failed to write "${entry.displayName}" — open Script Manager to enable writes`);
+      }
+    }
+
+    // ---- Reformat Entry (for pending character entries) ----
+    async function reformatEntry(entryId) {
+      if (!loreState) return;
+      const entry = loreState.pendingEntries.find(e => e.id === entryId);
+      if (!entry || entry.category !== 'character') return;
+
+      const card = lorePendingList.querySelector(`[data-entry-id="${entryId}"]`);
+      if (card) {
+        const btn = card.querySelector('.btn-reformat');
+        if (btn) { btn.disabled = true; btn.textContent = '...'; }
+      }
+
+      try {
+        // Get story text for enrichment context
+        let storyText = '';
+        try {
+          await checkLoreProxy();
+          storyText = await loreCall('getStoryText') || '';
+        } catch (_) {}
+
+        const result = await window.sceneVisualizer.loreReformatEntry(entry.displayName, entry.text, storyText, currentStoryId);
+        if (result.success && result.result) {
+          entry.text = result.result;
+          await saveLoreState();
+          showToast(`Enriched "${entry.displayName}"`);
+          refreshLoreUI();
+        } else {
+          showToast(result.error || 'Reformat failed');
+        }
+      } catch (e) {
+        showToast('Reformat failed: ' + (e.message || 'Unknown error'));
+      }
+
+      if (card) {
+        const btn = card.querySelector('.btn-reformat');
+        if (btn) { btn.disabled = false; btn.textContent = 'Reformat'; }
+      }
+    }
+
+    // ---- Family Tree Visualization ----
+    async function buildFamilyTree() {
+      const section = document.getElementById('familyTreeSection');
+      const container = document.getElementById('familyTreeContainer');
+      const countEl = document.getElementById('familyTreeCount');
+      if (!section || !container) return;
+
+      // Gather character entries from lorebook and pending
+      let entries = [];
+      try {
+        await checkLoreProxy();
+        const lorebookEntries = await loreCall('getEntries');
+        entries = lorebookEntries.filter(e => {
+          if (!e.text || e.text.length < 30) return false;
+          // Check if it's a character entry
+          return /^Name:/m.test(e.text) || /\b(he|she|they)\s+(is|are|was|were)\b/i.test(e.text);
+        });
+      } catch (_) {}
+
+      // Also include pending character entries
+      if (loreState && loreState.pendingEntries) {
+        for (const pe of loreState.pendingEntries) {
+          if (pe.category === 'character' && pe.text) {
+            entries.push(pe);
+          }
+        }
+      }
+
+      if (entries.length < 2) {
+        section.style.display = 'none';
+        return;
+      }
+
+      // Parse family data from each entry
+      const characters = entries.map(e => {
+        const nameField = (e.text.match(/^Name:\s*(.*)/m) || [])[1] || e.displayName || '';
+        const name = nameField.trim();
+        const familyLines = [];
+        const relationLines = [];
+
+        // Parse Family: section
+        const familyMatch = e.text.match(/^Family:\s*(.*(?:\n\s*-\s+.*)*)/m);
+        if (familyMatch) {
+          const block = familyMatch[1];
+          const lines = block.split('\n');
+          for (const line of lines) {
+            const m = line.match(/^\s*-\s+(.+?):\s+(.+)/);
+            if (m) familyLines.push({ name: m[1].trim(), role: m[2].trim() });
+          }
+        }
+
+        // Parse Relationships: section
+        const relMatch = e.text.match(/^Relationships:\s*(.*(?:\n\s*-\s+.*)*)/m);
+        if (relMatch) {
+          const block = relMatch[1];
+          const lines = block.split('\n');
+          for (const line of lines) {
+            const m = line.match(/^\s*-\s+(.+?):\s+(.+)/);
+            if (m) relationLines.push({ name: m[1].trim(), role: m[2].trim() });
+          }
+        }
+
+        // Extract last name
+        const nameParts = name.split(/\s+/);
+        const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : null;
+
+        return { name, lastName, family: familyLines, relationships: relationLines, displayName: e.displayName };
+      });
+
+      // Union-find for grouping characters by explicit family references
+      const parent = new Map();
+      const charByName = new Map();
+      for (let i = 0; i < characters.length; i++) {
+        parent.set(i, i);
+        charByName.set(characters[i].name.toLowerCase(), i);
+        // Also index by first name for partial matches
+        const firstName = characters[i].name.split(/\s+/)[0].toLowerCase();
+        if (!charByName.has(firstName)) charByName.set(firstName, i);
+      }
+
+      function find(x) {
+        while (parent.get(x) !== x) {
+          parent.set(x, parent.get(parent.get(x)));
+          x = parent.get(x);
+        }
+        return x;
+      }
+      function union(a, b) {
+        const ra = find(a), rb = find(b);
+        if (ra !== rb) parent.set(ra, rb);
+      }
+
+      // Helper to find a character index by name reference
+      function findCharIndex(refName) {
+        const lower = refName.toLowerCase().trim();
+        if (charByName.has(lower)) return charByName.get(lower);
+        // Try partial match (first name)
+        const first = lower.split(/\s+/)[0];
+        if (charByName.has(first)) return charByName.get(first);
+        // Try substring match
+        for (const [key, idx] of charByName) {
+          if (key.includes(first) || first.includes(key)) return idx;
+        }
+        return -1;
+      }
+
+      // Union characters linked by Family fields
+      for (let i = 0; i < characters.length; i++) {
+        for (const fam of characters[i].family) {
+          const j = findCharIndex(fam.name);
+          if (j >= 0 && j !== i) union(i, j);
+        }
+      }
+
+      // Also union characters sharing last names
+      const lastNameMap = new Map();
+      for (let i = 0; i < characters.length; i++) {
+        if (characters[i].lastName) {
+          const ln = characters[i].lastName.toLowerCase();
+          if (lastNameMap.has(ln)) {
+            union(i, lastNameMap.get(ln));
+          } else {
+            lastNameMap.set(ln, i);
+          }
+        }
+      }
+
+      // Build groups from union-find
+      const groups = new Map();
+      for (let i = 0; i < characters.length; i++) {
+        const root = find(i);
+        if (!groups.has(root)) groups.set(root, []);
+        groups.get(root).push(i);
+      }
+
+      // Build a role-lookup: "what role does character X have in this family?"
+      // by checking what OTHER characters say about X in their Family fields
+      function getRoleLabel(memberIdx, groupIndices) {
+        for (const otherIdx of groupIndices) {
+          if (otherIdx === memberIdx) continue;
+          for (const fam of characters[otherIdx].family) {
+            const refIdx = findCharIndex(fam.name);
+            if (refIdx === memberIdx) {
+              return fam.role; // e.g. "daughter", "father"
+            }
+          }
+        }
+        return null;
+      }
+
+      // Render
+      let html = '';
+      let groupCount = 0;
+
+      for (const [root, memberIndices] of groups) {
+        if (memberIndices.length < 2) continue; // skip singletons
+        groupCount++;
+
+        // Determine group label: prefer shared last name, else first member with a last name
+        let label = null;
+        for (const idx of memberIndices) {
+          if (characters[idx].lastName) {
+            label = `${characters[idx].lastName} Family`;
+            break;
+          }
+        }
+        if (!label) label = `${characters[memberIndices[0]].name}'s Family`;
+
+        html += `<div style="margin-bottom:12px;border:1px solid #333;border-radius:6px;overflow:hidden;">`;
+        html += `<div style="background:#2a2a4a;padding:6px 10px;font-weight:600;color:#e94560;font-size:12px;">${escapeHtml(label)}</div>`;
+        html += `<div style="padding:6px 10px;">`;
+
+        for (const idx of memberIndices) {
+          const member = characters[idx];
+          const role = getRoleLabel(idx, memberIndices);
+          html += `<div style="margin:3px 0;padding:3px 0;border-bottom:1px solid #222;">`;
+          html += `<span style="color:#ccc;font-size:12px;">${escapeHtml(member.name)}</span>`;
+          if (role) {
+            html += ` <span style="color:#e94560;font-size:10px;font-style:italic;">(${escapeHtml(role)})</span>`;
+          }
+
+          // Show family connections
+          if (member.family.length > 0) {
+            const famStr = member.family.map(f => `<span style="color:#888;font-size:10px;">${escapeHtml(f.name)} (${escapeHtml(f.role)})</span>`).join(', ');
+            html += `<div style="margin-left:16px;margin-top:2px;">${famStr}</div>`;
+          }
+
+          // Show non-family relationships in a different color
+          if (member.relationships.length > 0) {
+            const relStr = member.relationships.map(r => `<span style="color:#6a9ec9;font-size:10px;">${escapeHtml(r.name)} (${escapeHtml(r.role)})</span>`).join(', ');
+            html += `<div style="margin-left:16px;margin-top:2px;">${relStr}</div>`;
+          }
+          html += `</div>`;
+        }
+
+        html += `</div></div>`;
+      }
+
+      if (groupCount > 0) {
+        container.innerHTML = html;
+        countEl.textContent = `(${groupCount})`;
+        section.style.display = '';
+      } else {
+        section.style.display = 'none';
+      }
+    }
+
+    // Auto-scan trigger: hook into prompt detection
+    let loreAutoScanPending = false;
+
+    // Override the existing prompt update handler to also trigger lore auto-scan
+    const originalOnPromptUpdate = window.sceneVisualizer.onPromptUpdate;
+    window.sceneVisualizer.onPromptUpdate((data) => {
+      // Let existing handler run (it's already been registered)
+      // Trigger auto-scan check
+      if (loreSettings && loreSettings.autoScan && currentStoryId && !loreIsScanning) {
+        loreAutoScanPending = true;
+      }
+    });
+
+    // Periodic check for auto-scan condition
+    setInterval(async () => {
+      if (!loreAutoScanPending || loreIsScanning || !currentStoryId || !loreSettings?.autoScan) return;
+      loreAutoScanPending = false;
+
+      try {
+        // Quick story length check
+        let storyLen = 0;
+        await checkLoreProxy();
+        const _st = await loreCall('getStoryText');
+        storyLen = _st ? _st.length : 0;
+
+        const newChars = storyLen - loreLastStoryLength;
+        if (newChars >= (loreSettings.minNewCharsForScan || 500)) {
+          console.log(`[Lore] Auto-scan triggered: ${newChars} new chars`);
+          runLoreScan();
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }, 15000);
+
+    // Check lore proxy on initial webview ready (data loading handled by handleStoryContextChange)
+    webview.addEventListener('dom-ready', () => {
+      setTimeout(() => checkLoreProxy(), 3000);
+    });
+
+    // =========================================================================
+    // STORY COMPREHENSION UI
+    // =========================================================================
+
+    const startProgressiveScanBtn = document.getElementById('startProgressiveScanBtn');
+    const pauseProgressiveScanBtn = document.getElementById('pauseProgressiveScanBtn');
+    const cancelProgressiveScanBtn = document.getElementById('cancelProgressiveScanBtn');
+    const comprehensionStatusText = document.getElementById('comprehensionStatusText');
+    const comprehensionProgressFill = document.getElementById('comprehensionProgressFill');
+    const masterSummaryDisplay = document.getElementById('masterSummaryDisplay');
+    const masterSummaryText = document.getElementById('masterSummaryText');
+    const entityProfilesList = document.getElementById('entityProfilesList');
+    const entityCount = document.getElementById('entityCount');
+    const entityProfileCards = document.getElementById('entityProfileCards');
+
+    let comprehensionScanning = false;
+    let comprehensionPaused = false;
+
+    function renderComprehensionState(compState) {
+      if (!compState || !compState.masterSummary) {
+        comprehensionStatusText.textContent = 'Not scanned';
+        comprehensionProgressFill.style.width = '0%';
+        masterSummaryDisplay.style.display = 'none';
+        entityProfilesList.style.display = 'none';
+        return;
+      }
+
+      const pct = compState.totalStoryLength > 0
+        ? Math.round((compState.lastProcessedLength / compState.totalStoryLength) * 100)
+        : 100;
+      comprehensionStatusText.textContent = `${compState.chunks?.length || 0} chunks processed`;
+      comprehensionProgressFill.style.width = pct + '%';
+
+      if (compState.masterSummary) {
+        masterSummaryDisplay.style.display = '';
+        masterSummaryText.textContent = compState.masterSummary;
+      } else {
+        masterSummaryDisplay.style.display = 'none';
+      }
+
+      const profiles = compState.entityProfiles || {};
+      const profileKeys = Object.keys(profiles);
+      if (profileKeys.length > 0) {
+        entityProfilesList.style.display = '';
+        entityCount.textContent = profileKeys.length;
+        entityProfileCards.innerHTML = '';
+
+        const sorted = profileKeys
+          .map(k => ({ name: k, ...profiles[k] }))
+          .sort((a, b) => (b.lastChunkIndex || 0) - (a.lastChunkIndex || 0));
+
+        for (const entity of sorted) {
+          const card = document.createElement('div');
+          card.className = `entity-profile-card ${entity.category || ''}`;
+          const detailParts = [entity.traits, entity.relationships, entity.status].filter(p => p);
+          card.innerHTML = `
+            <div class="entity-header">
+              <span class="category-badge ${entity.category || ''}">${entity.category || '?'}</span>
+              <span class="entity-name">${escapeHtml(entity.name)}</span>
+            </div>
+            <div class="entity-detail">${escapeHtml(detailParts.join(' | '))}</div>
+          `;
+          card.addEventListener('click', () => card.classList.toggle('expanded'));
+          entityProfileCards.appendChild(card);
+        }
+      } else {
+        entityProfilesList.style.display = 'none';
+      }
+    }
+
+    async function loadComprehensionState() {
+      if (!currentStoryId) {
+        console.log('[Comprehension] No currentStoryId, skipping load');
+        renderComprehensionState(null);
+        return;
+      }
+      console.log('[Comprehension] Loading state for story:', currentStoryId);
+      const compState = await window.sceneVisualizer.loreGetComprehension(currentStoryId);
+      console.log('[Comprehension] Got state:', compState ? `masterSummary=${!!compState.masterSummary}, entities=${Object.keys(compState.entityProfiles || {}).length}` : 'null');
+      renderComprehensionState(compState);
+    }
+
+    startProgressiveScanBtn.addEventListener('click', async () => {
+      if (comprehensionScanning || !currentStoryId) return;
+
+      comprehensionScanning = true;
+      comprehensionPaused = false;
+      startProgressiveScanBtn.disabled = true;
+      pauseProgressiveScanBtn.style.display = '';
+      cancelProgressiveScanBtn.style.display = '';
+      comprehensionStatusText.textContent = 'Starting...';
+
+      try {
+        await checkLoreProxy();
+        let storyText = await loreCall('getStoryText');
+
+        if (!storyText || storyText.trim().length < 100) {
+          comprehensionStatusText.textContent = 'Not enough story text';
+          return;
+        }
+
+        await window.sceneVisualizer.loreStartProgressiveScan(currentStoryId, storyText);
+      } catch (e) {
+        comprehensionStatusText.textContent = 'Error: ' + (e.message || 'Scan failed');
+      } finally {
+        comprehensionScanning = false;
+        startProgressiveScanBtn.disabled = false;
+        pauseProgressiveScanBtn.style.display = 'none';
+        cancelProgressiveScanBtn.style.display = 'none';
+      }
+    });
+
+    pauseProgressiveScanBtn.addEventListener('click', async () => {
+      if (!currentStoryId) return;
+      if (comprehensionPaused) {
+        await window.sceneVisualizer.loreResumeProgressiveScan(currentStoryId);
+        comprehensionPaused = false;
+        pauseProgressiveScanBtn.textContent = 'Pause';
+      } else {
+        await window.sceneVisualizer.lorePauseProgressiveScan(currentStoryId);
+        comprehensionPaused = true;
+        pauseProgressiveScanBtn.textContent = 'Resume';
+      }
+    });
+
+    cancelProgressiveScanBtn.addEventListener('click', async () => {
+      if (!currentStoryId) return;
+      await window.sceneVisualizer.loreCancelProgressiveScan(currentStoryId);
+      comprehensionStatusText.textContent = 'Cancelled';
+    });
+
+    // Progress listener
+    window.sceneVisualizer.onProgressiveScanProgress((data) => {
+      if (data.storyId !== currentStoryId) return;
+      const pct = data.chunksTotal > 0
+        ? Math.round((data.chunksProcessed / data.chunksTotal) * 100)
+        : 0;
+      comprehensionProgressFill.style.width = pct + '%';
+
+      const phaseLabels = {
+        processing: `Processing chunk ${data.chunksProcessed}/${data.chunksTotal}...`,
+        consolidating: 'Consolidating summaries...',
+        complete: 'Complete',
+      };
+      comprehensionStatusText.textContent = phaseLabels[data.phase] || `${pct}%`;
+    });
+
+    // Completion listener
+    window.sceneVisualizer.onProgressiveScanComplete((data) => {
+      if (data.storyId !== currentStoryId) return;
+      comprehensionScanning = false;
+      startProgressiveScanBtn.disabled = false;
+      pauseProgressiveScanBtn.style.display = 'none';
+      cancelProgressiveScanBtn.style.display = 'none';
+      loadComprehensionState();
+    });
+
+    // Auto-incremental update when story grows and comprehension data exists
+    let comprehensionAutoUpdatePending = false;
+    setInterval(async () => {
+      if (comprehensionAutoUpdatePending || comprehensionScanning || !currentStoryId) return;
+
+      try {
+        const compState = await window.sceneVisualizer.loreGetComprehension(currentStoryId);
+        if (!compState || !compState.lastProcessedLength) return;
+
+        await checkLoreProxy();
+        const _st = await loreCall('getStoryText');
+        let storyLen = _st ? _st.length : 0;
+
+        const newChars = storyLen - compState.lastProcessedLength;
+        if (newChars > 2000) {
+          comprehensionAutoUpdatePending = true;
+          console.log(`[Comprehension] Auto-incremental update: ${newChars} new chars`);
+
+          let storyText = await loreCall('getStoryText');
+
+          await window.sceneVisualizer.loreIncrementalUpdate(currentStoryId, storyText);
+          await loadComprehensionState();
+          comprehensionAutoUpdatePending = false;
+        }
+      } catch (e) {
+        comprehensionAutoUpdatePending = false;
+      }
+    }, 30000);
+
+    // Comprehension data loading handled by handleStoryContextChange (eager load)
+
+    // =========================================================================
+    // END LORE CREATOR
+    // =========================================================================
+
+    // =========================================================================
+    // MEMORY MANAGER
+    // =========================================================================
+
+    // Memory DOM refs
+    const memoryProxyDot = document.getElementById('memoryProxyDot');
+    const memoryProxyText = document.getElementById('memoryProxyText');
+    const memoryTokenCount = document.getElementById('memoryTokenCount');
+    const memoryTokenPercent = document.getElementById('memoryTokenPercent');
+    const memoryTokenBar = document.getElementById('memoryTokenBar');
+    const memoryUpdateBtn = document.getElementById('memoryUpdateBtn');
+    const memoryRefreshBtn = document.getElementById('memoryRefreshBtn');
+    const memoryClearBtn = document.getElementById('memoryClearBtn');
+    const memoryProgress = document.getElementById('memoryProgress');
+    const memoryProgressText = document.getElementById('memoryProgressText');
+    const memoryPreview = document.getElementById('memoryPreview');
+    const memoryEventList = document.getElementById('memoryEventList');
+    const memoryEventCount = document.getElementById('memoryEventCount');
+    const memoryCharList = document.getElementById('memoryCharList');
+    const memoryCharCount = document.getElementById('memoryCharCount');
+    const memoryAutoUpdate = document.getElementById('memoryAutoUpdate');
+    const memoryTokenLimit = document.getElementById('memoryTokenLimit');
+    const memoryTokenLimitValue = document.getElementById('memoryTokenLimitValue');
+    const memoryCompression = document.getElementById('memoryCompression');
+    const memoryCompressionValue = document.getElementById('memoryCompressionValue');
+    const memoryKeywords = document.getElementById('memoryKeywords');
+
+    // Memory state
+    let memorySettings = null;
+    let memoryState = null;
+    let memoryProxyReady = false;
+    let memoryIsProcessing = false;
+    let memoryLastStoryLength = 0;
+
+    async function checkMemoryProxy() {
+      const status = await checkProxyStatus('__MEMORY_PROXY_CMD__', '__MEMORY_PROXY_RES__');
+      memoryProxyReady = status === 'ready';
+      if (memoryProxyReady) {
+        memoryProxyDot.classList.remove('inactive');
+        memoryProxyDot.classList.add('active');
+        memoryProxyText.textContent = 'Full Access';
+      } else {
+        // Memory read/write still works via DOM fallback
+        memoryProxyDot.classList.remove('inactive');
+        memoryProxyDot.classList.add('active');
+        memoryProxyText.textContent = 'DOM Mode';
+      }
+    }
+
+    // Initialize memory settings
+    async function initMemory() {
+      try {
+        memorySettings = await window.sceneVisualizer.memoryGetSettings();
+        memoryAutoUpdate.checked = memorySettings.autoUpdate;
+        memoryTokenLimit.value = memorySettings.tokenLimit;
+        memoryTokenLimitValue.textContent = memorySettings.tokenLimit;
+        memoryCompression.value = memorySettings.compressionThreshold;
+        memoryCompressionValue.textContent = Math.round(memorySettings.compressionThreshold * 100) + '%';
+        memoryKeywords.value = (memorySettings.trackedKeywords || []).join(', ');
+      } catch (e) {
+        console.log('[Memory] Init error:', e);
+      }
+    }
+    initMemory();
+
+    // Load per-story memory state
+    async function loadMemoryState() {
+      if (!currentStoryId) return;
+      try {
+        memoryState = await window.sceneVisualizer.memoryGetState(currentStoryId);
+        renderMemoryUI();
+      } catch (e) {
+        console.log('[Memory] Load state error:', e);
+      }
+    }
+
+    // Render memory UI from current state
+    function renderMemoryUI() {
+      if (!memoryState || !memorySettings) return;
+
+      const events = memoryState.events || [];
+      const characters = memoryState.characters || {};
+      const situation = memoryState.currentSituation || '';
+
+      // Build memory text for preview
+      const sections = [];
+      if (events.length > 0) {
+        sections.push('=== STORY TIMELINE ===\n' + events.map(e => '• ' + e.text).join('\n'));
+      }
+      if (situation) {
+        sections.push('=== CURRENT SITUATION ===\n' + situation);
+      }
+      const charEntries = Object.entries(characters);
+      if (charEntries.length > 0) {
+        sections.push('=== KEY CHARACTERS ===\n' + charEntries.map(([n, d]) => n + ': ' + d.state).join('\n'));
+      }
+      const memoryText = sections.join('\n\n');
+
+      // Token bar
+      const tokenEst = Math.ceil(memoryText.length / 4);
+      const limit = memorySettings.tokenLimit || 1000;
+      const pct = Math.min(100, Math.round((tokenEst / limit) * 100));
+
+      memoryTokenCount.textContent = `Tokens: ~${tokenEst} / ${limit}`;
+      memoryTokenPercent.textContent = pct + '%';
+      memoryTokenPercent.style.color = pct > 80 ? '#ff6b6b' : pct > 60 ? '#ffd93d' : '#6bcb77';
+      memoryTokenBar.style.width = pct + '%';
+      memoryTokenBar.style.backgroundColor = pct > 80 ? '#ff6b6b' : pct > 60 ? '#ffd93d' : '#6bcb77';
+
+      // Preview
+      memoryPreview.value = memoryText || '(No memory content yet)';
+
+      // Event history (last 10)
+      memoryEventCount.textContent = events.length;
+      if (events.length > 0) {
+        memoryEventList.innerHTML = events.slice(-10).reverse().map(e =>
+          `<div class="memory-event-card${e.compressed ? ' compressed' : ''}">${e.compressed ? '[C] ' : '> '}${e.text}</div>`
+        ).join('');
+      } else {
+        memoryEventList.innerHTML = '<div style="font-size:11px;color:#666;">No events tracked yet</div>';
+      }
+
+      // Character states
+      memoryCharCount.textContent = charEntries.length;
+      if (charEntries.length > 0) {
+        memoryCharList.innerHTML = charEntries.map(([name, data]) =>
+          `<div class="memory-char-item"><span class="char-name">${name}</span>: ${data.state}</div>`
+        ).join('');
+      } else {
+        memoryCharList.innerHTML = '<div style="font-size:11px;color:#666;">No characters tracked</div>';
+      }
+    }
+
+    function refreshMemoryUI() {
+      checkMemoryProxy();
+      loadMemoryState();
+    }
+
+    // Update Now — incremental processing
+    async function runMemoryUpdate() {
+      if (!currentStoryId || memoryIsProcessing) return;
+      memoryIsProcessing = true;
+      memoryProgress.style.display = 'flex';
+      memoryProgressText.textContent = 'Getting story text...';
+      memoryUpdateBtn.disabled = true;
+      memoryRefreshBtn.disabled = true;
+
+      try {
+        let storyText = await memoryCall('getStoryText');
+
+        if (!storyText || storyText.trim().length < 50) {
+          memoryProgressText.textContent = 'Not enough story content';
+          setTimeout(() => { memoryProgress.style.display = 'none'; }, 2000);
+          return;
+        }
+
+        memoryProgressText.textContent = 'Extracting events...';
+        const result = await window.sceneVisualizer.memoryProcess(storyText, currentStoryId);
+
+        if (result.success) {
+          memoryState = result.state;
+          renderMemoryUI();
+
+          // Write to NovelAI Memory field (smart: proxy → DOM fallback)
+          if (result.memoryText) {
+            try { await memoryCall('setMemory', result.memoryText); } catch(e) {
+              console.log('[Memory] Write failed:', e.message);
+            }
+          }
+
+          memoryProgressText.textContent = 'Memory updated';
+          memoryLastStoryLength = storyText.length;
+        } else {
+          memoryProgressText.textContent = result.error || 'Update failed';
+        }
+      } catch (e) {
+        console.error('[Memory] Update error:', e);
+        memoryProgressText.textContent = 'Error: ' + (e.message || e);
+      } finally {
+        memoryIsProcessing = false;
+        memoryUpdateBtn.disabled = false;
+        memoryRefreshBtn.disabled = false;
+        setTimeout(() => { memoryProgress.style.display = 'none'; }, 2500);
+      }
+    }
+
+    // Refresh All — full re-analysis
+    async function runMemoryRefresh() {
+      if (!currentStoryId || memoryIsProcessing) return;
+      memoryIsProcessing = true;
+      memoryProgress.style.display = 'flex';
+      memoryProgressText.textContent = 'Getting story text...';
+      memoryUpdateBtn.disabled = true;
+      memoryRefreshBtn.disabled = true;
+
+      try {
+        let storyText = await memoryCall('getStoryText');
+
+        if (!storyText || storyText.trim().length < 50) {
+          memoryProgressText.textContent = 'Not enough story content';
+          setTimeout(() => { memoryProgress.style.display = 'none'; }, 2000);
+          return;
+        }
+
+        memoryProgressText.textContent = 'Analyzing full story...';
+        const result = await window.sceneVisualizer.memoryForceRefresh(storyText, currentStoryId);
+
+        if (result.success) {
+          memoryState = result.state;
+          renderMemoryUI();
+
+          if (result.memoryText) {
+            try { await memoryCall('setMemory', result.memoryText); } catch(e) {
+              console.log('[Memory] Write failed:', e.message);
+            }
+          }
+
+          memoryProgressText.textContent = `Refreshed (${(result.state?.events || []).length} events)`;
+          memoryLastStoryLength = storyText.length;
+        } else {
+          memoryProgressText.textContent = result.error || 'Refresh failed';
+        }
+      } catch (e) {
+        console.error('[Memory] Refresh error:', e);
+        memoryProgressText.textContent = 'Error: ' + (e.message || e);
+      } finally {
+        memoryIsProcessing = false;
+        memoryUpdateBtn.disabled = false;
+        memoryRefreshBtn.disabled = false;
+        setTimeout(() => { memoryProgress.style.display = 'none'; }, 2500);
+      }
+    }
+
+    // Clear memory
+    async function runMemoryClear() {
+      if (!currentStoryId) return;
+      await window.sceneVisualizer.memoryClear(currentStoryId);
+      memoryState = { events: [], characters: {}, currentSituation: '', lastProcessedLength: 0 };
+      memoryLastStoryLength = 0;
+      renderMemoryUI();
+
+      try { await memoryCall('setMemory', ''); } catch(e) {
+        console.log('[Memory] Clear write failed:', e.message);
+      }
+    }
+
+    // Button handlers
+    memoryUpdateBtn.addEventListener('click', runMemoryUpdate);
+    memoryRefreshBtn.addEventListener('click', runMemoryRefresh);
+    memoryClearBtn.addEventListener('click', runMemoryClear);
+
+    // Settings change handlers
+    let memorySettingsSaveTimeout = null;
+    function saveMemorySettings() {
+      if (memorySettingsSaveTimeout) clearTimeout(memorySettingsSaveTimeout);
+      memorySettingsSaveTimeout = setTimeout(() => {
+        if (!memorySettings) return;
+        window.sceneVisualizer.memorySetSettings(memorySettings);
+      }, 500);
+    }
+
+    memoryAutoUpdate.addEventListener('change', () => {
+      if (!memorySettings) return;
+      memorySettings.autoUpdate = memoryAutoUpdate.checked;
+      saveMemorySettings();
+    });
+
+    memoryTokenLimit.addEventListener('input', () => {
+      if (!memorySettings) return;
+      memorySettings.tokenLimit = parseInt(memoryTokenLimit.value);
+      memoryTokenLimitValue.textContent = memoryTokenLimit.value;
+      saveMemorySettings();
+      renderMemoryUI();
+    });
+
+    memoryCompression.addEventListener('input', () => {
+      if (!memorySettings) return;
+      memorySettings.compressionThreshold = parseFloat(memoryCompression.value);
+      memoryCompressionValue.textContent = Math.round(memorySettings.compressionThreshold * 100) + '%';
+      saveMemorySettings();
+    });
+
+    memoryKeywords.addEventListener('change', () => {
+      if (!memorySettings) return;
+      memorySettings.trackedKeywords = memoryKeywords.value.split(',').map(k => k.trim()).filter(k => k.length > 0);
+      saveMemorySettings();
+    });
+
+    // Progress listener
+    window.sceneVisualizer.onMemoryProgress((data) => {
+      if (data.phase === 'extracting') {
+        memoryProgressText.textContent = `Extracting chunk ${data.chunk}/${data.totalChunks}...`;
+      } else if (data.phase === 'compiling') {
+        memoryProgressText.textContent = 'Compiling memory...';
+      }
+    });
+
+    // Memory data loading handled by handleStoryContextChange (eager load)
+
+    // Auto-update interval — runs every 20s, checks for new content
+    setInterval(async () => {
+      if (!memorySettings || !memorySettings.autoUpdate) return;
+      if (!currentStoryId || memoryIsProcessing) return;
+
+      try {
+        const text = await memoryCall('getStoryText');
+        const storyLen = text ? text.length : 0;
+
+        const lastLen = memoryState ? (memoryState.lastProcessedLength || 0) : 0;
+        const newChars = storyLen - lastLen;
+
+        if (newChars > 300) {
+          console.log(`[Memory] Auto-update: ${newChars} new chars detected`);
+          runMemoryUpdate();
+        }
+      } catch (e) {
+        // Ignore polling errors
+      }
+    }, 20000);
+
+    // Check memory proxy on initial webview ready (data loading handled by handleStoryContextChange)
+    webview.addEventListener('dom-ready', () => {
+      setTimeout(() => checkMemoryProxy(), 4000);
+    });
+
+    // =========================================================================
+    // END MEMORY MANAGER
+    // =========================================================================
+
+    // Story text change detection — triggers Electron-side prompt generation
+    // when >50 chars of new text detected (replaces old textarea polling)
+    setInterval(async () => {
+      if (isGenerating || isGeneratingPrompt) return;
+      try {
+        const text = await readStoryTextFromDOM();
+        if (text && Math.abs(text.length - lastKnownStoryLength) > 50) {
+          lastKnownStoryLength = text.length;
+          await generateScenePromptFromEditor();
+        }
+      } catch (e) {
+        // Ignore errors during polling
       }
     }, 10000);
   </script>
