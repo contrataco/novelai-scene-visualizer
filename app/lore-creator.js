@@ -15,7 +15,7 @@ const LOG_PREFIX = '[LoreCreator]';
 // ============================================================================
 
 const MAX_INPUT_TEXT = 6000;
-const MAX_ELEMENTS_PER_SCAN = 5;
+const MAX_ELEMENTS_PER_SCAN = 8;
 const INTER_CALL_DELAY = 1000;
 const MAX_UPDATES_PER_SCAN = 3;
 
@@ -95,13 +95,21 @@ function delay(ms) {
 /**
  * Pass 1: Identify lore-worthy elements in story text.
  */
-async function identifyLoreElements(storyText, settings, existingEntryNames, generateTextFn, comprehensionContext) {
+async function identifyLoreElements(storyText, settings, existingEntries, generateTextFn, comprehensionContext) {
   const enabledCats = ALL_CATEGORIES.filter(c => settings.enabledCategories[c]);
   if (enabledCats.length === 0) return [];
 
-  const existingLine = existingEntryNames.length > 0
-    ? `\nEXISTING ENTRIES: ${existingEntryNames.slice(0, 30).join(', ')}\n`
-    : '';
+  // Build rich existing entries block with names, aliases, and description snippets
+  let existingLine = '';
+  if (existingEntries.length > 0) {
+    const entryLines = existingEntries.slice(0, 20).map(e => {
+      const aliases = (e.keys || []).filter(k => k.toLowerCase() !== (e.displayName || '').toLowerCase());
+      const aliasStr = aliases.length > 0 ? ` (aliases: ${aliases.slice(0, 3).join(', ')})` : '';
+      const snippet = (e.text || '').slice(0, 80).replace(/\n/g, ' ');
+      return `- ${e.displayName}${aliasStr}: ${snippet}`;
+    });
+    existingLine = `\nEXISTING ENTRIES:\n${entryLines.join('\n')}\n`;
+  }
 
   const contextOverhead = (comprehensionContext ? comprehensionContext.length : 0) + existingLine.length;
   const textBudget = MAX_INPUT_TEXT - contextOverhead;
@@ -111,11 +119,11 @@ async function identifyLoreElements(storyText, settings, existingEntryNames, gen
     console.log(`${LOG_PREFIX} Text truncated to ${textBudget} chars for identification`);
   }
 
-  const mergeInstruction = existingEntryNames.length > 0
-    ? `\nIf an element is the same entity as an existing entry (e.g., a real name revealed for a described character), set "mergesWith" to that existing entry name. Otherwise set "mergesWith" to null.`
+  const mergeInstruction = existingEntries.length > 0
+    ? `\nIf an element is the same entity as an existing entry (e.g., a real name revealed for a described character, or a nickname/alias for an existing character), set "mergesWith" to that existing entry name. Otherwise set "mergesWith" to null.`
     : '';
 
-  const mergeField = existingEntryNames.length > 0
+  const mergeField = existingEntries.length > 0
     ? ',"mergesWith":"existing entry name or null"'
     : '';
 
@@ -126,7 +134,7 @@ async function identifyLoreElements(storyText, settings, existingEntryNames, gen
   const messages = [
     {
       role: 'system',
-      content: 'You are an expert story analyst. Identify important lore-worthy elements from story text. Output ONLY valid JSON.',
+      content: 'You are an expert story analyst. Identify important lore-worthy elements from story text. IMPORTANT: Do not identify elements that are clearly the same entity as an existing entry, even under a different name or alias. Output ONLY valid JSON.',
     },
     {
       role: 'user',
@@ -189,12 +197,9 @@ async function generateLoreEntryFromElement(name, category, storyText, settings,
 
   let detailInstructions = '';
   if (isCharacter) {
-    detailInstructions = `Use this structured format for the text field:\n${CHARACTER_TEMPLATE}\n\nFor each field, deduce from character behavior, dialogue, and narrative context:
-- Self-Image: infer from how they present themselves vs how others see them
-- Motivations/Goals: infer from their actions, desires, and conflicts
-- Secrets: infer from contradictions between what they say and do, or hidden knowledge
+    detailInstructions = `Use this structured format for the text field:\n${CHARACTER_TEMPLATE}\n\nOnly include information that is explicitly stated or clearly shown in the text. Leave fields blank if the story doesn't provide that information. Do NOT speculate or infer.
 - Relationships/Family: use "- Name: detail" format, one per line
-Omit fields with no information or basis for deduction. Keep each field concise.`;
+Omit fields that have no explicit support in the story. Keep each field concise.`;
   } else {
     switch (settings.detailLevel) {
       case 'brief':
@@ -226,7 +231,7 @@ Omit fields with no information or basis for deduction. Keep each field concise.
   const messages = [
     {
       role: 'system',
-      content: 'You are a lorebook entry writer for interactive fiction. Create rich, well-structured lorebook entries by deducing and inferring from context, character behavior, and narrative implications. Output ONLY valid JSON.',
+      content: 'You are a lorebook entry writer for interactive fiction. Create accurate, well-structured lorebook entries based on what is explicitly stated or clearly shown in the story. Do not speculate or infer beyond what the text supports. Output ONLY valid JSON.',
     },
     {
       role: 'user',
@@ -235,7 +240,7 @@ ${otherEntriesLine}
 ${comprehensionBlock}Based on this recent story context:
 ${contextText}
 
-${detailInstructions} Deduce details from context and character behavior — don't limit yourself to only explicitly stated facts. Provide 2-4 short keywords or aliases that would trigger this entry.${relationshipInstruction}
+${detailInstructions} Stick strictly to what is stated or shown in the story text. Provide 2-4 short keywords or aliases that would trigger this entry.${relationshipInstruction}
 
 Output ONLY this JSON format, no other text:
 {"displayName":"Full Name","keys":["key1","key2"],"text":"Entry text here.","confidence":3}`,
@@ -252,6 +257,11 @@ Output ONLY this JSON format, no other text:
     const parsed = recoverJSON(content);
 
     if (parsed && typeof parsed.displayName === 'string') {
+      const confidence = typeof parsed.confidence === 'number' ? Math.min(5, Math.max(1, parsed.confidence)) : 3;
+      if (confidence < 2) {
+        console.log(`${LOG_PREFIX} Rejecting low-confidence entry "${parsed.displayName}" (confidence=${confidence})`);
+        return null;
+      }
       const keys = Array.isArray(parsed.keys)
         ? parsed.keys.filter(k => typeof k === 'string').slice(0, 6)
         : [name];
@@ -261,7 +271,7 @@ Output ONLY this JSON format, no other text:
         displayName: parsed.displayName || name,
         keys,
         text: typeof parsed.text === 'string' ? parsed.text : '',
-        confidence: typeof parsed.confidence === 'number' ? Math.min(5, Math.max(1, parsed.confidence)) : 3,
+        confidence,
         createdAt: Date.now(),
       };
     }
@@ -593,8 +603,8 @@ Output ONLY this JSON format, no other text:
 
 /**
  * Enrich and reformat an existing character entry to match the structured template.
- * Preserves all existing information and fills in missing fields by deducing
- * from story context and character behavior.
+ * Preserves all existing information and fills in missing fields only when
+ * explicitly stated or clearly demonstrated in the story.
  */
 async function enrichAndReformatEntry(displayName, currentText, generateTextFn, comprehensionContext, storyText) {
   const comprehensionBlock = comprehensionContext
@@ -608,11 +618,11 @@ async function enrichAndReformatEntry(displayName, currentText, generateTextFn, 
   const messages = [
     {
       role: 'system',
-      content: 'You enrich and reformat lorebook character entries. Using story context, fill in missing fields by deducing from character behavior, dialogue, and narrative role. Return ONLY the reformatted text, no JSON or extra formatting.',
+      content: 'You enrich and reformat lorebook character entries. Fill in fields only if the information is explicitly stated or clearly demonstrated in the story. Leave fields blank rather than speculate. Return ONLY the reformatted text, no JSON or extra formatting.',
     },
     {
       role: 'user',
-      content: `Enrich and reformat this character lorebook entry into the structured template below. Preserve ALL existing information. For empty or missing fields, deduce from story context — infer motivations from actions, secrets from contradictions, self-image from how they present themselves.
+      content: `Enrich and reformat this character lorebook entry into the structured template below. Preserve ALL existing information. Fill in fields only if the information is explicitly stated or clearly demonstrated in the story. Leave fields blank rather than speculate.
 
 Current entry for "${displayName}":
 ${currentText}
@@ -620,7 +630,7 @@ ${comprehensionBlock}${storyBlock}
 Required format:
 ${CHARACTER_TEMPLATE}
 
-Omit fields only if there is truly no basis for deduction. Keep each field concise. Return ONLY the reformatted text.`,
+Omit fields that have no explicit support in the story. Keep each field concise. Return ONLY the reformatted text.`,
     },
   ];
 
@@ -882,6 +892,15 @@ function fuzzyNameScore(a, b) {
   if (!al || !bl) return 0;
   if (al === bl) return 1.0;
   if (al.includes(bl) || bl.includes(al)) return 0.8;
+  // Word-overlap check (Jaccard similarity on word sets)
+  const wordsA = new Set(al.split(/\s+/).filter(w => w.length > 0));
+  const wordsB = new Set(bl.split(/\s+/).filter(w => w.length > 0));
+  if (wordsA.size > 0 && wordsB.size > 0) {
+    const intersection = [...wordsA].filter(w => wordsB.has(w));
+    const union = new Set([...wordsA, ...wordsB]);
+    const jaccard = intersection.length / union.size;
+    if (jaccard >= 0.5 && intersection.some(w => w.length >= 3)) return 0.75;
+  }
   if (al.length <= 20 && bl.length <= 20) {
     const dist = levenshteinDistance(al, bl);
     if (dist <= 2) return 0.7;
@@ -1624,7 +1643,7 @@ async function scanForLore(storyText, settings, existingEntries, state, generate
   if (onProgress) onProgress({ phase: 'identifying' });
   console.log(`${LOG_PREFIX} Scanning ${storyText.length} chars for lore elements...`);
 
-  const elements = await identifyLoreElements(storyText, settings, existingEntryNames, generateTextFn, comprehensionContext);
+  const elements = await identifyLoreElements(storyText, settings, existingEntries, generateTextFn, comprehensionContext);
 
   if (elements.length === 0) {
     console.log(`${LOG_PREFIX} No elements identified`);
