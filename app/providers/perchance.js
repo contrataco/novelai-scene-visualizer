@@ -1,5 +1,6 @@
 const { BrowserWindow, session } = require('electron');
 const path = require('path');
+const { extractPerchanceKey } = require('../perchance-key');
 
 const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
@@ -105,10 +106,12 @@ async function getApiWindow() {
   const ses = session.fromPartition('persist:perchance-api');
   ses.setUserAgent(CHROME_UA);
 
+  // Window must be visible for Turnstile to solve; hidden after clearance
   apiWindow = new BrowserWindow({
-    show: false,
-    width: 400,
-    height: 300,
+    show: true,
+    width: 500,
+    height: 400,
+    title: 'Perchance — Clearing Cloudflare...',
     webPreferences: {
       partition: 'persist:perchance-api',
       nodeIntegration: false,
@@ -122,7 +125,7 @@ async function getApiWindow() {
     cfReady = false;
   });
 
-  console.log('[Perchance] Navigating hidden window to clear Cloudflare...');
+  console.log('[Perchance] Navigating window to clear Cloudflare...');
 
   // Navigate to the API domain to trigger CF challenge and clear it
   await apiWindow.loadURL('https://image-generation.perchance.org/', {
@@ -141,6 +144,8 @@ async function getApiWindow() {
   if (!cleared) {
     console.log('[Perchance] WARNING: CF clearance may have failed, API calls may not work');
   }
+  // Hide window after clearance — it only needs to be visible for Turnstile
+  apiWindow.hide();
   return apiWindow;
 }
 
@@ -334,10 +339,12 @@ async function acquireKeyViaVerifyUser(store) {
     const ses = session.fromPartition('persist:perchance-api');
     ses.setUserAgent(CHROME_UA);
 
+    // Window must be visible — Turnstile detects hidden windows and fails
     const tempWin = new BrowserWindow({
-      show: false,
-      width: 400,
-      height: 300,
+      show: true,
+      width: 500,
+      height: 400,
+      title: 'Perchance — Acquiring Key...',
       webPreferences: {
         partition: 'persist:perchance-api',
         nodeIntegration: false,
@@ -348,9 +355,9 @@ async function acquireKeyViaVerifyUser(store) {
 
     try {
       const url = `https://image-generation.perchance.org/api/verifyUser?thread=0&__cacheBust=${Math.random()}`;
-      console.log('[Perchance] Navigating temp window to verifyUser...');
+      console.log('[Perchance] Navigating visible temp window to verifyUser...');
       await tempWin.loadURL(url, { userAgent: CHROME_UA });
-      await waitForCfClearance(tempWin, 20000);
+      await waitForCfClearance(tempWin, 30000);
 
       // Poll page content for the userKey (page JS needs time to execute)
       const maxWait = 20000;
@@ -421,7 +428,7 @@ module.exports = {
     const keyAge = Date.now() - (store.get('perchanceKeyAcquiredAt') || 0);
     if (keyAge > KEY_MAX_AGE_MS) {
       console.log(`[Perchance] Key is ${Math.round(keyAge / 60000)}min old, attempting proactive refresh...`);
-      const freshKey = await acquireKeyViaVerifyUser(store);
+      const freshKey = await extractPerchanceKey(store);
       if (freshKey) {
         userKey = freshKey;
       }
@@ -452,8 +459,9 @@ module.exports = {
       await new Promise(r => setTimeout(r, waitMs));
     }
 
-    // Pre-check: verify key status via the API browser (which has CF clearance)
-    await ensureKeyVerified(userKey);
+    // Note: ensureKeyVerified removed — Turnstile cannot solve in hidden Electron
+    // windows, so the verification pre-check always times out. Instead we just
+    // attempt the generate call directly and handle invalid_key in the retry loop.
 
     // Step 1: Generate image (via browser to bypass Cloudflare)
     // URL gets auth/cache params; body gets generation params (POST)
@@ -468,6 +476,7 @@ module.exports = {
       subChannel: 'public',
       prompt: finalPrompt,
       negativePrompt: finalNegative,
+      style: artStyleId === 'no-style' ? undefined : artStyleId,
       seed: seed,
       resolution: resolution,
       guidanceScale: guidanceScale,
@@ -526,8 +535,8 @@ module.exports = {
       if (generateData.status === 'invalid_key') {
         if (!invalidKeyRetried) {
           invalidKeyRetried = true;
-          console.log('[Perchance] Key rejected, attempting to acquire fresh key via verifyUser...');
-          const freshKey = await acquireKeyViaVerifyUser(store);
+          console.log('[Perchance] Key rejected, attempting re-extraction via system Chrome...');
+          const freshKey = await extractPerchanceKey(store);
           if (freshKey) {
             userKey = freshKey;
             generateUrl.searchParams.set('userKey', userKey);

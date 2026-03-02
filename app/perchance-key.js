@@ -343,21 +343,23 @@ async function extractPerchanceKeyViaElectron(store) {
 }
 
 /**
- * Main extraction entry point. Tries Electron BrowserWindow first (simpler),
- * falls back to system Chrome if Electron fails (e.g. anti-bot blocks it).
+ * Main extraction entry point. Tries system Chrome first (Turnstile/CF
+ * challenges pass reliably in real Chrome but always fail in Electron).
+ * Falls back to Electron BrowserWindow only if Chrome is unavailable.
  */
 async function extractPerchanceKey(store) {
-  // Try Electron BrowserWindow first
-  console.log('[PerchanceKey] Attempting extraction via Electron...');
-  const electronKey = await extractPerchanceKeyViaElectron(store);
-  if (electronKey) return electronKey;
-
-  // Fallback to system Chrome
+  // Try system Chrome first — Turnstile cannot be solved in Electron
   const chromePath = findChromePath();
   if (chromePath) {
-    console.log('[PerchanceKey] Electron extraction failed, trying system Chrome...');
-    return extractPerchanceKeyViaChrome(store);
+    console.log('[PerchanceKey] Attempting extraction via system Chrome...');
+    const chromeKey = await extractPerchanceKeyViaChrome(store);
+    if (chromeKey) return chromeKey;
   }
+
+  // Fallback to Electron BrowserWindow (may fail if Turnstile blocks it)
+  console.log('[PerchanceKey] Chrome unavailable or failed, trying Electron...');
+  const electronKey = await extractPerchanceKeyViaElectron(store);
+  if (electronKey) return electronKey;
 
   return null;
 }

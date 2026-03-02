@@ -7,19 +7,20 @@ Object.defineProperty(navigator, 'webdriver', {
   configurable: true,
 });
 
-// Add window.chrome object (missing in Electron, present in real Chrome)
-if (!window.chrome) {
-  window.chrome = {
-    runtime: {
-      connect: function() {},
-      sendMessage: function() {},
-      onMessage: { addListener: function() {}, removeListener: function() {} },
-      onConnect: { addListener: function() {}, removeListener: function() {} },
-    },
-    loadTimes: function() { return {}; },
-    csi: function() { return {}; },
-    app: { isInstalled: false, getDetails: function() {}, getIsInstalled: function() {}, installState: function() {} },
+// Add window.chrome object (missing or partial in Electron, present in real Chrome)
+if (!window.chrome) window.chrome = {};
+if (!window.chrome.runtime) {
+  window.chrome.runtime = {
+    connect: function() {},
+    sendMessage: function() {},
+    onMessage: { addListener: function() {}, removeListener: function() {} },
+    onConnect: { addListener: function() {}, removeListener: function() {} },
   };
+}
+if (!window.chrome.loadTimes) window.chrome.loadTimes = function() { return {}; };
+if (!window.chrome.csi) window.chrome.csi = function() { return {}; };
+if (!window.chrome.app) {
+  window.chrome.app = { isInstalled: false, getDetails: function() {}, getIsInstalled: function() {}, installState: function() {} };
 }
 
 // Detect platform from navigator (before patching)
@@ -124,9 +125,9 @@ Function.prototype.toString = function() {
 };
 
 // Patch key functions
-if (window.chrome) {
-  patchToString(window.chrome.runtime.connect);
-  patchToString(window.chrome.runtime.sendMessage);
+if (window.chrome && window.chrome.runtime) {
+  if (typeof window.chrome.runtime.connect === 'function') patchToString(window.chrome.runtime.connect);
+  if (typeof window.chrome.runtime.sendMessage === 'function') patchToString(window.chrome.runtime.sendMessage);
 }
 
 // Remove Electron/Node.js traces from window
