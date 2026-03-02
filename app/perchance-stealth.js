@@ -22,32 +22,41 @@ if (!window.chrome) {
   };
 }
 
+// Detect platform from navigator (before patching)
+const platformMap = {
+  'MacIntel': 'macOS',
+  'Win32': 'Windows',
+  'Linux x86_64': 'Linux',
+  'Linux aarch64': 'Linux',
+};
+const detectedPlatform = platformMap[navigator.platform] || 'macOS';
+
 // NavigatorUAData API (Chrome 90+, missing in Electron)
 if (!navigator.userAgentData) {
   Object.defineProperty(navigator, 'userAgentData', {
     get: () => ({
       brands: [
-        { brand: 'Google Chrome', version: '131' },
-        { brand: 'Chromium', version: '131' },
+        { brand: 'Google Chrome', version: '120' },
+        { brand: 'Chromium', version: '120' },
         { brand: 'Not_A Brand', version: '24' },
       ],
       mobile: false,
-      platform: 'macOS',
+      platform: detectedPlatform,
       getHighEntropyValues: function(hints) {
         return Promise.resolve({
           brands: this.brands,
           mobile: false,
-          platform: 'macOS',
+          platform: detectedPlatform,
           platformVersion: '15.0.0',
           architecture: 'arm',
           bitness: '64',
           model: '',
-          uaFullVersion: '131.0.0.0',
+          uaFullVersion: '120.0.0.0',
           fullVersionList: this.brands,
         });
       },
       toJSON: function() {
-        return { brands: this.brands, mobile: false, platform: 'macOS' };
+        return { brands: this.brands, mobile: false, platform: detectedPlatform };
       },
     }),
     configurable: true,

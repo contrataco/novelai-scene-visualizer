@@ -1,7 +1,7 @@
 const { BrowserWindow, session } = require('electron');
 const path = require('path');
 
-const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 // Art styles: prompt/negative prompt modifiers
 const ART_STYLES = {
@@ -137,22 +137,32 @@ async function getApiWindow() {
     console.log('[Perchance] Cloudflare cleared for API domain');
   }
 
-  cfReady = true;
+  cfReady = cleared;
+  if (!cleared) {
+    console.log('[Perchance] WARNING: CF clearance may have failed, API calls may not work');
+  }
   return apiWindow;
 }
 
 /**
- * Wait for Cloudflare challenge to auto-solve by checking page title.
- * CF challenge pages have title "Just a moment..."
+ * Wait for Cloudflare challenge to auto-solve by checking multiple signals.
+ * Returns true if cleared, false if still challenging after maxWait.
  */
 async function waitForCfClearance(win, maxWait) {
   const start = Date.now();
   while (Date.now() - start < maxWait) {
     try {
-      const title = await win.webContents.executeJavaScript('document.title');
-      if (!title.includes('Just a moment')) {
-        return true;
-      }
+      const isChallenging = await win.webContents.executeJavaScript(`
+        (function() {
+          var title = document.title || '';
+          if (title.includes('Just a moment')) return true;
+          if (document.querySelector('iframe[src*="challenges.cloudflare.com"]')) return true;
+          if (document.querySelector('#challenge-running, #challenge-stage')) return true;
+          if (document.querySelector('meta[http-equiv="refresh"][content*="challenge"]')) return true;
+          return false;
+        })()
+      `);
+      if (!isChallenging) return true;
     } catch {}
     await new Promise(r => setTimeout(r, 1000));
   }
@@ -209,11 +219,13 @@ async function browserFetch(url, options = {}) {
 
 /**
  * Fetch binary data (image) via the browser and return as base64.
+ * Includes a 60s timeout to prevent infinite hangs.
  */
 async function browserFetchBase64(url) {
   const win = await getApiWindow();
 
-  const base64 = await win.webContents.executeJavaScript(`
+  const timeoutMs = 60000;
+  const fetchPromise = win.webContents.executeJavaScript(`
     (async () => {
       const res = await fetch(${JSON.stringify(url)});
       if (!res.ok) throw new Error('Download failed: ' + res.status);
@@ -229,7 +241,11 @@ async function browserFetchBase64(url) {
     })()
   `);
 
-  return base64;
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Image download timed out after 60s')), timeoutMs)
+  );
+
+  return Promise.race([fetchPromise, timeoutPromise]);
 }
 
 /**
@@ -308,35 +324,65 @@ async function ensureKeyVerified(userKey) {
 }
 
 /**
- * Attempt to acquire a fresh userKey by calling the verifyUser endpoint
- * through the API BrowserWindow (which has CF cookies). This mirrors
- * the approach used by the eeemoon/perchance Python library.
+ * Attempt to acquire a fresh userKey by navigating a temp BrowserWindow
+ * to the verifyUser endpoint. Full page navigation allows the browser to
+ * render Turnstile/CF challenges and produce the userKey in the DOM.
  * Returns the new userKey or null if it fails.
  */
 async function acquireKeyViaVerifyUser(store) {
   try {
-    const url = `https://image-generation.perchance.org/api/verifyUser?thread=0&__cacheBust=${Math.random()}`;
-    const result = await browserFetch(url);
+    const ses = session.fromPartition('persist:perchance-api');
+    ses.setUserAgent(CHROME_UA);
 
-    if (!result.ok) {
-      console.log(`[Perchance] verifyUser request failed: HTTP ${result.status}`);
+    const tempWin = new BrowserWindow({
+      show: false,
+      width: 400,
+      height: 300,
+      webPreferences: {
+        partition: 'persist:perchance-api',
+        nodeIntegration: false,
+        contextIsolation: false,
+        preload: path.join(__dirname, '..', 'perchance-stealth.js'),
+      }
+    });
+
+    try {
+      const url = `https://image-generation.perchance.org/api/verifyUser?thread=0&__cacheBust=${Math.random()}`;
+      console.log('[Perchance] Navigating temp window to verifyUser...');
+      await tempWin.loadURL(url, { userAgent: CHROME_UA });
+      await waitForCfClearance(tempWin, 20000);
+
+      // Poll page content for the userKey (page JS needs time to execute)
+      const maxWait = 20000;
+      const start = Date.now();
+      while (Date.now() - start < maxWait) {
+        const content = await tempWin.webContents.executeJavaScript(
+          'document.documentElement.innerHTML'
+        );
+
+        // Match "userKey":"<64-char hex>" pattern (same as Python library)
+        const match = content.match(/"userKey"\s*:\s*"([a-f0-9]{64})"/i);
+        if (match) {
+          const newKey = match[1];
+          store.set('perchanceUserKey', newKey);
+          store.set('perchanceKeyAcquiredAt', Date.now());
+          console.log(`[Perchance] Key acquired via verifyUser navigation: ${newKey.substring(0, 10)}...`);
+          return newKey;
+        }
+
+        if (content.includes('too_many_requests')) {
+          console.log('[Perchance] verifyUser: rate limited');
+          return null;
+        }
+
+        await new Promise(r => setTimeout(r, 1500));
+      }
+
+      console.log('[Perchance] verifyUser navigation timed out — no key found in page');
       return null;
+    } finally {
+      tempWin.destroy();
     }
-
-    // Response is HTML containing the userKey in a script or data attribute
-    const body = result.body;
-    // Try to extract userKey from the response (64-char hex)
-    const match = body.match(/[a-f0-9]{64}/i);
-    if (match) {
-      const newKey = match[0];
-      store.set('perchanceUserKey', newKey);
-      store.set('perchanceKeyAcquiredAt', Date.now());
-      console.log(`[Perchance] Key acquired via verifyUser: ${newKey.substring(0, 10)}...`);
-      return newKey;
-    }
-
-    console.log('[Perchance] verifyUser response did not contain a userKey');
-    return null;
   } catch (e) {
     console.log('[Perchance] acquireKeyViaVerifyUser failed:', e.message);
     return null;
