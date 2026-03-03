@@ -1,7 +1,11 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron');
+const { app, BrowserWindow, ipcMain, session, globalShortcut, webContents } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const Store = require('electron-store');
+
+// Suppress EPIPE errors on stdout/stderr (parent pipe may close in dev mode)
+process.stdout?.on('error', () => {});
+process.stderr?.on('error', () => {});
 
 // Providers
 const novelaiProvider = require('./providers/novelai');
@@ -10,6 +14,12 @@ const veniceProvider = require('./providers/venice');
 const polloProvider = require('./providers/pollo');
 const { extractPerchanceKey, verifyPerchanceKey } = require('./perchance-key');
 const storyboard = require('./storyboard');
+const loreCreator = require('./lore-creator');
+const loreComprehension = require('./lore-comprehension');
+const memoryManager = require('./memory-manager');
+const litrpgTracker = require('./litrpg-tracker');
+const portraitManager = require('./portrait-manager');
+const db = require('./db');
 
 const PROVIDERS = {
   [novelaiProvider.id]: novelaiProvider,
@@ -63,7 +73,21 @@ const store = new Store({
         // UC Preset
         ucPreset: 'heavy'
       }
-    }
+    },
+    loreSettings: {
+      type: 'object',
+      default: loreCreator.DEFAULT_SETTINGS
+    },
+    loreState: {
+      type: 'object',
+      default: {}
+    },
+    loreLlmProvider: { type: 'string', default: 'novelai' },
+    loreOllamaModel: { type: 'string', default: 'mistral:7b' },
+    loreOllamaUrl: { type: 'string', default: 'http://localhost:11434' },
+    loreComprehension: { type: 'object', default: {} },
+    memorySettings: { type: 'object', default: {} },
+    memoryState: { type: 'object', default: {} }
   }
 });
 
@@ -72,7 +96,21 @@ function getActiveProvider() {
   return PROVIDERS[id] || PROVIDERS.novelai;
 }
 
+// Enforce single instance — prevent data corruption from concurrent store access
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  console.log('[Main] Another instance is already running — quitting');
+  app.quit();
+}
+
 let mainWindow;
+
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -125,39 +163,21 @@ function setupTokenInterception() {
   );
 }
 
-// Track current story context in memory
-let currentStoryContext = { storyId: null, storyTitle: null };
-
-// Relay story context from webview to renderer
-ipcMain.on('story-context-from-webview', (event, data) => {
-  currentStoryContext = { storyId: data.storyId || null, storyTitle: data.storyTitle || null };
-  console.log('[Main] Story context updated:', currentStoryContext.storyId, currentStoryContext.storyTitle);
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('story-context-update', currentStoryContext);
-  }
-});
-
-// Relay prompts from webview to renderer
-ipcMain.on('prompt-from-webview', (event, data) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    // Include story context if present in data or from stored context
-    if (!data.storyId && currentStoryContext.storyId) {
-      data.storyId = currentStoryContext.storyId;
-      data.storyTitle = currentStoryContext.storyTitle;
-    }
-    mainWindow.webContents.send('prompt-update', data);
-  }
-});
-
-// Relay suggestions from webview to renderer
-ipcMain.on('suggestions-from-webview', (event, data) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('suggestions-update', data);
-  }
-});
-
 // Token status query
 ipcMain.handle('get-token-status', () => ({ hasToken: !!store.get('apiToken') }));
+
+// Open webview DevTools for DOM inspection
+ipcMain.handle('open-webview-devtools', () => {
+  const allContents = webContents.getAllWebContents();
+  const wv = allContents.find(wc => wc.getURL().includes('novelai.net'));
+  if (wv) {
+    wv.openDevTools({ mode: 'detach' });
+    console.log('[Main] Opened webview DevTools');
+    return { success: true };
+  }
+  console.log('[Main] No NovelAI webview found');
+  return { success: false, error: 'No NovelAI webview found' };
+});
 
 // Clear webview cache (NovelAI partition)
 ipcMain.handle('clear-webview-cache', async () => {
@@ -601,6 +621,1038 @@ ipcMain.handle('set-image-settings', (event, settings) => {
   return { success: true };
 });
 
+// IPC Handler — Electron-side suggestion generation (parallel with script's image prompt)
+ipcMain.handle('generate-suggestions-direct', async (event, data) => {
+  try {
+    // Backward-compat: accept string or {storyText, storyId}
+    const storyText = typeof data === 'string' ? data : data.storyText;
+    const storyId = typeof data === 'string' ? null : data.storyId;
+
+    // Build narrative context from comprehension + memory
+    const narrativeContext = storyId
+      ? buildUnifiedContext(storyId, { comprehension: true, memory: true, budget: 2000 })
+      : '';
+    if (narrativeContext) {
+      console.log(`[Main] Suggestions: injecting narrative context (${narrativeContext.length} chars)`);
+    }
+
+    const provider = PROVIDERS.novelai;
+    const narrativeBlock = narrativeContext
+      ? `\nNARRATIVE CONTEXT:\n${narrativeContext}\n\nUse established characters, situations, and relationships.`
+      : '';
+
+    const messages = [
+      {
+        role: 'system',
+        content: `You are a creative writing assistant helping with interactive fiction. Generate exactly 3 different, compelling story continuation suggestions.
+
+Vary the format naturally based on what fits the story moment:
+- For action scenes: Brief 1-2 sentence prompts
+- For dialogue moments: A character line with brief context
+- For dramatic beats: Longer 2-4 sentence continuations
+
+Each suggestion should:
+- Feel natural as something the user might type
+- Offer a distinct direction (don't repeat the same idea)
+- Match the tone and style of the existing story
+- Be written from the perspective the story uses (first/second/third person)
+${narrativeBlock}
+Output ONLY valid JSON in this exact format:
+{"suggestions":[{"type":"action","text":"suggestion 1"},{"type":"dialogue","text":"suggestion 2"},{"type":"narrative","text":"suggestion 3"}]}
+
+Types: "action" for physical actions, "dialogue" for speech, "narrative" for description/thought, "mixed" for combinations.`
+      },
+      {
+        role: 'user',
+        content: `Based on this story so far, generate 3 distinct continuation suggestions:\n\n---\n${storyText}\n---\n\nRemember: Output ONLY the JSON object, nothing else.`
+      }
+    ];
+
+    console.log('[Main] Generating suggestions via direct API call...');
+    const response = await provider.generateText(messages, {
+      model: 'glm-4-6',
+      max_tokens: 300,
+      temperature: 0.6,
+    }, store);
+
+    let content = '';
+    if (response.output) {
+      content = response.output;
+    } else if (response.choices && response.choices.length > 0) {
+      content = response.choices[0].text || response.choices[0].message?.content || '';
+    }
+
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      let jsonStr = jsonMatch[0];
+      try {
+        JSON.parse(jsonStr);
+      } catch {
+        // Fix truncated JSON
+        const quoteCount = (jsonStr.match(/"/g) || []).length;
+        if (quoteCount % 2 !== 0) jsonStr += '"';
+        const openBrackets = (jsonStr.match(/\[/g) || []).length;
+        const closeBrackets = (jsonStr.match(/\]/g) || []).length;
+        const openBraces = (jsonStr.match(/\{/g) || []).length;
+        const closeBraces = (jsonStr.match(/\}/g) || []).length;
+        for (let i = 0; i < openBrackets - closeBrackets; i++) jsonStr += ']';
+        for (let i = 0; i < openBraces - closeBraces; i++) jsonStr += '}';
+      }
+      const parsed = JSON.parse(jsonStr);
+      if (Array.isArray(parsed.suggestions)) {
+        const suggestions = parsed.suggestions
+          .map(s => ({ type: s.type || 'mixed', text: typeof s.text === 'string' ? s.text : String(s.text || '') }))
+          .filter(s => s.text.length > 0)
+          .slice(0, 3);
+        console.log(`[Main] Generated ${suggestions.length} suggestions via direct API`);
+        return { success: true, suggestions };
+      }
+    }
+
+    console.log('[Main] Could not parse suggestions from API response');
+    return { success: false, error: 'Could not parse response' };
+  } catch (e) {
+    console.error('[Main] Direct suggestion generation failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+// IPC Handler — Electron-side scene prompt generation (replaces script sandbox)
+ipcMain.handle('generate-scene-prompt', async (event, { storyText, entries, artStyle, storyId }) => {
+  try {
+    const provider = PROVIDERS.novelai;
+
+    // 1. Extract character appearances from lorebook entries
+    const appearancePatterns = [
+      /appearance[:\s]+([^.]+(?:\.[^.]+){0,3})/i,
+      /physical(?:\s+description)?[:\s]+([^.]+(?:\.[^.]+){0,3})/i,
+      /looks?\s+like[:\s]+([^.]+(?:\.[^.]+){0,2})/i,
+      /(?:has|with)\s+([\w\s,]+(?:hair|eyes|skin|build|height)[^.]*)/i,
+      /description[:\s]+([^.]+(?:\.[^.]+){0,3})/i,
+    ];
+    const visualKeywords = ['hair', 'eyes', 'tall', 'short', 'wears', 'wearing', 'dressed', 'skin', 'face', 'build'];
+    const characters = [];
+
+    for (const entry of (entries || [])) {
+      if (entry.enabled === false) continue;
+      const text = entry.text || '';
+      const displayName = entry.displayName || '';
+      const keys = entry.keys || [];
+      let appearance = '';
+
+      for (const pattern of appearancePatterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+          appearance = match[1].trim();
+          break;
+        }
+      }
+
+      if (!appearance && text.length < 500) {
+        const hasVisual = visualKeywords.some(kw => text.toLowerCase().includes(kw));
+        if (hasVisual) appearance = text;
+      }
+
+      if (appearance) {
+        const name = displayName || (keys.length > 0 ? keys[0] : '');
+        if (name) characters.push({ name, appearance: appearance.slice(0, 300) });
+      }
+    }
+
+    // 2. Detect which characters appear in recent text
+    const recentText = storyText.slice(-3000).toLowerCase();
+    const mentioned = characters.filter(c => recentText.includes(c.name.toLowerCase()));
+
+    // 3. Build character reference string
+    let characterRefs = '';
+    if (mentioned.length > 0) {
+      characterRefs = '\n\nCharacter References:\n' + mentioned.map(c => `[${c.name}: ${c.appearance}]`).join('\n');
+      console.log(`[Main] Scene prompt: ${mentioned.length} characters in scene: ${mentioned.map(c => c.name).join(', ')}`);
+    }
+
+    // 4. Build system prompt
+    const style = artStyle || 'anime style, detailed, high quality';
+    let systemContent = `You are an expert at creating image generation prompts. Analyze story text and create a vivid visual prompt that captures the current scene.
+
+Output ONLY a JSON object with this format:
+{"prompt": "detailed visual description", "negativePrompt": "things to avoid"}
+
+Guidelines:
+- Focus on the CURRENT scene, not backstory
+- Describe characters' appearance, poses, expressions
+- Include setting details (location, lighting, atmosphere)
+- Use comma-separated tags/descriptors
+- Add style tags: ${style}
+- Keep prompts under 200 words
+- For negativePrompt: list common image generation issues to avoid`;
+
+    if (characterRefs) {
+      systemContent += '\n\nIMPORTANT: Use the provided Character References for accurate character appearances. Include their visual details (hair color, eye color, clothing, etc.) in the prompt when they appear in the scene.';
+    }
+
+    // Inject narrative context from comprehension + memory
+    const narrativeContext = storyId
+      ? buildUnifiedContext(storyId, { comprehension: true, memory: true, budget: 2000 })
+      : '';
+    if (narrativeContext) {
+      systemContent += `\n\nNARRATIVE CONTEXT (use for scene understanding):\n${narrativeContext}`;
+      console.log(`[Main] Scene prompt: injecting narrative context (${narrativeContext.length} chars)`);
+    }
+
+    let userContent = `Create an image prompt for this scene:\n\n${storyText.slice(-2000)}`;
+    if (characterRefs) userContent += characterRefs;
+    userContent += '\n\nRemember: Output ONLY valid JSON with "prompt" and "negativePrompt" keys.';
+
+    const messages = [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: userContent }
+    ];
+
+    // 5. Call GLM-4-6
+    console.log('[Main] Generating scene prompt via direct API call...');
+    const response = await provider.generateText(messages, {
+      model: 'glm-4-6',
+      max_tokens: 400,
+      temperature: 0.7,
+    }, store);
+
+    let content = '';
+    if (response.output) {
+      content = response.output;
+    } else if (response.choices && response.choices.length > 0) {
+      content = response.choices[0].text || response.choices[0].message?.content || '';
+    }
+
+    // 6. Parse JSON with truncated-JSON recovery
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      let jsonStr = jsonMatch[0];
+      try {
+        JSON.parse(jsonStr);
+      } catch {
+        const quoteCount = (jsonStr.match(/"/g) || []).length;
+        if (quoteCount % 2 !== 0) jsonStr += '"';
+        const openBrackets = (jsonStr.match(/\[/g) || []).length;
+        const closeBrackets = (jsonStr.match(/\]/g) || []).length;
+        const openBraces = (jsonStr.match(/\{/g) || []).length;
+        const closeBraces = (jsonStr.match(/\}/g) || []).length;
+        for (let i = 0; i < openBrackets - closeBrackets; i++) jsonStr += ']';
+        for (let i = 0; i < openBraces - closeBraces; i++) jsonStr += '}';
+      }
+      const parsed = JSON.parse(jsonStr);
+      const prompt = parsed.prompt || '';
+      const negativePrompt = parsed.negativePrompt || 'lowres, bad anatomy, bad hands, text, error, missing fingers';
+      console.log(`[Main] Scene prompt generated (${prompt.length} chars)`);
+      return { success: true, prompt, negativePrompt };
+    }
+
+    console.log('[Main] Could not parse scene prompt from API response');
+    return { success: false, error: 'Could not parse response' };
+  } catch (e) {
+    console.error('[Main] Scene prompt generation failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+// IPC Handlers — Per-story scene prompt state persistence
+ipcMain.handle('scene:get-state', (event, storyId) => {
+  return db.getSceneState(storyId) || {
+    lastPrompt: '', lastNegativePrompt: '', lastStoryLength: 0,
+    suggestions: [], artStyle: '',
+  };
+});
+
+ipcMain.handle('scene:set-state', (event, { storyId, state }) => {
+  db.setSceneState(storyId, state);
+  return { success: true };
+});
+
+// ---------------------------------------------------------------------------
+// Lore Comprehension — Progressive scan state (in-memory, not persisted)
+// ---------------------------------------------------------------------------
+
+const progressiveScans = new Map(); // storyId → {cancel: false, pause: false}
+
+// ---------------------------------------------------------------------------
+// Lore Creator — LLM provider factory
+// ---------------------------------------------------------------------------
+
+function makeNovelaiGenerateTextFn() {
+  return async (messages, options) => {
+    return novelaiProvider.generateText(messages, {
+      model: 'glm-4-6',
+      max_tokens: options.max_tokens || 300,
+      temperature: options.temperature || 0.4,
+    }, store);
+  };
+}
+
+function makeOllamaGenerateTextFn() {
+  const ollamaUrl = store.get('loreOllamaUrl') || 'http://localhost:11434';
+  const ollamaModel = store.get('loreOllamaModel') || 'mistral:7b';
+
+  return async (messages, options) => {
+    const response = await fetch(`${ollamaUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: ollamaModel,
+        messages,
+        stream: false,
+        options: {
+          num_predict: options.max_tokens || 300,
+          temperature: options.temperature || 0.4,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Ollama API error ${response.status}: ${text}`);
+    }
+
+    const data = await response.json();
+    return { output: data.message?.content || '' };
+  };
+}
+
+function makeLoreGenerateTextFn() {
+  const llmProvider = store.get('loreLlmProvider') || 'novelai';
+  if (llmProvider === 'ollama') return makeOllamaGenerateTextFn();
+  return makeNovelaiGenerateTextFn();
+}
+
+async function isOllamaAvailable() {
+  try {
+    const ollamaUrl = store.get('loreOllamaUrl') || 'http://localhost:11434';
+    const response = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(2000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Unified Context Builder — combines comprehension + memory for subsystems
+// ---------------------------------------------------------------------------
+
+function buildUnifiedContext(storyId, options = {}) {
+  if (!storyId) return '';
+  const includeComp = options.comprehension !== false;
+  const includeMem = options.memory === true;
+  const totalBudget = options.budget || 3000;
+  const sections = [];
+  let remaining = totalBudget;
+
+  if (includeComp) {
+    const compState = db.getComprehension(storyId);
+    if (compState && compState.masterSummary) {
+      const ctx = loreComprehension.formatComprehensionContext(
+        compState.masterSummary, compState.entityProfiles
+      );
+      if (ctx) {
+        const capped = ctx.slice(0, Math.min(2500, Math.floor(remaining * 0.6)));
+        sections.push(capped);
+        remaining -= capped.length;
+      }
+    }
+  }
+
+  if (includeMem) {
+    const memState = db.getMemoryState(storyId);
+    if (memState) {
+      const ctx = memoryManager.formatMemoryContext(memState, Math.min(1200, remaining));
+      if (ctx) { sections.push(ctx); remaining -= ctx.length; }
+    }
+  }
+
+  return sections.filter(s => s.length > 0).join('\n\n').slice(0, totalBudget);
+}
+
+// ---------------------------------------------------------------------------
+// IPC Handlers — Lore Creator
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('lore:scan', async (event, { storyText, existingEntries, storyId, scanOptions }) => {
+  try {
+    const settings = store.get('loreSettings') || loreCreator.DEFAULT_SETTINGS;
+    const state = db.getLoreState(storyId) || {
+      pendingEntries: [], pendingUpdates: [], pendingMerges: [],
+      acceptedEntryIds: [], rejectedNames: [], dismissedUpdateNames: [],
+      rejectedMergeNames: [], dismissedReformatNames: [], charsSinceLastScan: 0, loreCategoryIds: {},
+      pendingCleanups: [], dismissedCleanupIds: [],
+    };
+
+    const generateTextFn = makeLoreGenerateTextFn();
+
+    // Check if secondary provider is available for hybrid scanning
+    let secondaryGenerateTextFn = null;
+    if (settings.hybridEnabled !== false) {
+      const primaryProvider = store.get('loreLlmProvider') || 'novelai';
+      if (primaryProvider === 'novelai') {
+        if (await isOllamaAvailable()) {
+          secondaryGenerateTextFn = makeOllamaGenerateTextFn();
+          console.log('[Main] Hybrid scan: NovelAI (primary) + Ollama (secondary)');
+        }
+      } else {
+        secondaryGenerateTextFn = makeNovelaiGenerateTextFn();
+        console.log('[Main] Hybrid scan: Ollama (primary) + NovelAI (secondary)');
+      }
+    }
+
+    // Build comprehension context if available
+    let comprehensionContext = '';
+    const compState = db.getComprehension(storyId);
+    if (compState && compState.masterSummary) {
+      comprehensionContext = loreComprehension.formatComprehensionContext(
+        compState.masterSummary, compState.entityProfiles
+      );
+      console.log(`[Main] Injecting comprehension context (${comprehensionContext.length} chars) into lore scan`);
+    }
+
+    // Inject memory state context into lore scan
+    const memState = db.getMemoryState(storyId);
+    if (memState && (memState.currentSituation || (memState.events && memState.events.length > 0))) {
+      const memCtx = memoryManager.formatMemoryContext(memState, 500);
+      if (memCtx) {
+        comprehensionContext = comprehensionContext
+          ? comprehensionContext + '\n\n' + memCtx
+          : memCtx;
+        console.log(`[Main] Injecting memory context (${memCtx.length} chars) into lore scan`);
+      }
+    }
+
+    // Apply scan options (category filter, relationships-only)
+    const effectiveSettings = { ...settings };
+    if (scanOptions) {
+      if (scanOptions.categoryFilter) {
+        effectiveSettings.enabledCategories = {};
+        for (const cat of loreCreator.ALL_CATEGORIES) {
+          effectiveSettings.enabledCategories[cat] = (cat === scanOptions.categoryFilter);
+        }
+      }
+      if (scanOptions.relationshipsOnly) {
+        effectiveSettings._relationshipsOnly = true;
+      }
+    }
+
+    const result = await loreCreator.scanForLore(
+      storyText, effectiveSettings, existingEntries, state, generateTextFn,
+      (progress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('lore:scan-progress', progress);
+        }
+      },
+      comprehensionContext || undefined,
+      secondaryGenerateTextFn
+    );
+
+    // Save updated state
+    db.setLoreState(storyId, result.state);
+
+    // Chain LitRPG scan if enabled
+    const rpgState = db.getLitrpgState(storyId);
+    if (rpgState && rpgState.enabled) {
+      console.log('[Main] Chaining LitRPG scan after lore scan');
+      try {
+        const rpgResult = await litrpgTracker.scanForRPGData(
+          storyText, rpgState, existingEntries || [], generateTextFn,
+          (progress) => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('litrpg:scan-progress', progress);
+            }
+          },
+          comprehensionContext || undefined,
+          secondaryGenerateTextFn
+        );
+        db.setLitrpgState(storyId, rpgResult.state);
+        // Notify renderer that RPG state updated
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('litrpg:state-updated', rpgResult.state);
+        }
+      } catch (rpgErr) {
+        console.error('[Main] Chained LitRPG scan failed:', rpgErr.message);
+      }
+    } else if (!rpgState || rpgState.detected === null) {
+      // First scan for this story — run LitRPG detection
+      try {
+        const detection = await litrpgTracker.detectLitRPG(storyText, generateTextFn);
+        const newRpgState = rpgState || { ...db.LITRPG_STATE_DEFAULTS };
+        newRpgState.detected = detection.detected;
+        newRpgState.systemType = detection.systemType;
+        db.setLitrpgState(storyId, newRpgState);
+        if (detection.detected && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('litrpg:detected', { systemType: detection.systemType });
+        }
+      } catch (detErr) {
+        console.error('[Main] LitRPG detection failed:', detErr.message);
+      }
+    }
+
+    return { success: true, ...result };
+  } catch (e) {
+    console.error('[Main] Lore scan failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('lore:organize', async (event, { entries, storyText, storyId, categoryMap }) => {
+  try {
+    const settings = store.get('loreSettings') || loreCreator.DEFAULT_SETTINGS;
+    const generateTextFn = makeLoreGenerateTextFn();
+
+    // Build comprehension context if available
+    let comprehensionContext = '';
+    const compState = db.getComprehension(storyId);
+    if (compState && compState.masterSummary) {
+      comprehensionContext = loreComprehension.formatComprehensionContext(
+        compState.masterSummary, compState.entityProfiles
+      );
+    }
+
+    // Get dismissed cleanup IDs
+    const state = db.getLoreState(storyId) || {};
+    const dismissedCleanupIds = state.dismissedCleanupIds || [];
+
+    const result = await loreCreator.organizeLorebook(
+      entries, storyText, settings, generateTextFn,
+      (progress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('lore:organize-progress', progress);
+        }
+      },
+      comprehensionContext || undefined,
+      categoryMap,
+      dismissedCleanupIds
+    );
+
+    return { success: true, ...result };
+  } catch (e) {
+    console.error('[Main] Lore organize failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('lore:identify-target', async (event, { prompt, entries }) => {
+  try {
+    const generateTextFn = makeLoreGenerateTextFn();
+    const result = await loreCreator.identifyTargetEntry(prompt, entries, generateTextFn);
+    return { success: true, result };
+  } catch (e) {
+    console.error('[Main] Lore identify-target failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('lore:generate-enriched', async (event, { prompt, currentText, displayName }) => {
+  try {
+    const generateTextFn = makeLoreGenerateTextFn();
+    const result = await loreCreator.generateEnrichedText(prompt, currentText, displayName, generateTextFn);
+    return { success: true, result };
+  } catch (e) {
+    console.error('[Main] Lore generate-enriched failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('lore:create-from-prompt', async (event, { prompt, category, storyText, storyId }) => {
+  try {
+    const settings = store.get('loreSettings') || loreCreator.DEFAULT_SETTINGS;
+    const generateTextFn = makeLoreGenerateTextFn();
+
+    // Build comprehension context if available
+    let comprehensionContext = '';
+    const compState2 = db.getComprehension(storyId);
+    if (compState2 && compState2.masterSummary) {
+      comprehensionContext = loreComprehension.formatComprehensionContext(
+        compState2.masterSummary, compState2.entityProfiles
+      );
+    }
+
+    // Get existing entry names to avoid duplicates
+    const loreStateForPrompt = db.getLoreState(storyId) || { pendingEntries: [], rejectedNames: [] };
+    const existingEntryNames = (loreStateForPrompt.pendingEntries || []).map(e => e.displayName).filter(Boolean);
+
+    const entries = await loreCreator.generateEntriesFromPrompt(
+      prompt, category, storyText, settings, existingEntryNames, generateTextFn,
+      comprehensionContext || undefined
+    );
+
+    return { success: true, entries };
+  } catch (e) {
+    console.error('[Main] Lore create-from-prompt failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('lore:reformat-entry', async (event, { displayName, currentText, storyText, storyId }) => {
+  try {
+    const generateTextFn = makeLoreGenerateTextFn();
+
+    // Build comprehension context if available
+    let comprehensionContext = '';
+    if (storyId) {
+      const compState3 = db.getComprehension(storyId);
+      if (compState3 && compState3.masterSummary) {
+        comprehensionContext = loreComprehension.formatComprehensionContext(
+          compState3.masterSummary, compState3.entityProfiles
+        );
+      }
+    }
+
+    const result = await loreCreator.enrichAndReformatEntry(
+      displayName, currentText, generateTextFn,
+      comprehensionContext || undefined, storyText || undefined
+    );
+    return { success: true, result };
+  } catch (e) {
+    console.error('[Main] Lore reformat-entry failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('lore:get-settings', () => {
+  return store.get('loreSettings') || loreCreator.DEFAULT_SETTINGS;
+});
+
+ipcMain.handle('lore:set-settings', (event, settings) => {
+  store.set('loreSettings', settings);
+  return { success: true };
+});
+
+ipcMain.handle('lore:get-state', (event, storyId) => {
+  return db.getLoreState(storyId) || {
+    pendingEntries: [], pendingUpdates: [], pendingMerges: [],
+    acceptedEntryIds: [], rejectedNames: [], dismissedUpdateNames: [],
+    rejectedMergeNames: [], charsSinceLastScan: 0, loreCategoryIds: {},
+    pendingCleanups: [], dismissedCleanupIds: [],
+  };
+});
+
+ipcMain.handle('lore:set-state', (event, { storyId, state }) => {
+  db.setLoreState(storyId, state);
+  return { success: true };
+});
+
+ipcMain.handle('lore:get-llm-provider', () => {
+  return {
+    provider: store.get('loreLlmProvider') || 'novelai',
+    ollamaModel: store.get('loreOllamaModel') || 'mistral:7b',
+    ollamaUrl: store.get('loreOllamaUrl') || 'http://localhost:11434',
+  };
+});
+
+ipcMain.handle('lore:set-llm-provider', (event, { provider, ollamaModel, ollamaUrl }) => {
+  if (provider !== undefined) store.set('loreLlmProvider', provider);
+  if (ollamaModel !== undefined) store.set('loreOllamaModel', ollamaModel);
+  if (ollamaUrl !== undefined) store.set('loreOllamaUrl', ollamaUrl);
+  return { success: true };
+});
+
+ipcMain.handle('lore:check-ollama', async () => {
+  try {
+    const url = store.get('loreOllamaUrl') || 'http://localhost:11434';
+    const response = await fetch(`${url}/api/tags`);
+    if (!response.ok) return { available: false };
+    const data = await response.json();
+    const models = (data.models || []).map(m => ({ name: m.name, size: m.size }));
+    return { available: true, models };
+  } catch {
+    return { available: false };
+  }
+});
+
+// ---------------------------------------------------------------------------
+// IPC Handlers — Lore Comprehension (progressive scan)
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('lore:start-progressive-scan', async (event, { storyId, storyText }) => {
+  try {
+    // Cancel any existing scan for this story
+    if (progressiveScans.has(storyId)) {
+      progressiveScans.get(storyId).cancel = true;
+    }
+
+    const scanControl = { cancel: false, pause: false };
+    progressiveScans.set(storyId, scanControl);
+
+    const generateTextFn = makeLoreGenerateTextFn();
+    const existingState = db.getComprehension(storyId) || null;
+
+    const updatedState = await loreComprehension.runProgressiveScan(
+      storyText,
+      existingState,
+      generateTextFn,
+      (progress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('lore:progressive-scan-progress', {
+            storyId,
+            ...progress,
+          });
+        }
+      },
+      () => {
+        // Check cancel and pause
+        const ctrl = progressiveScans.get(storyId);
+        if (!ctrl) return true;
+        if (ctrl.cancel) return true;
+        // Spin-wait on pause (check every 500ms)
+        // Actually, just return cancel status — pause is handled differently
+        return ctrl.cancel;
+      }
+    );
+
+    // Save state
+    db.setComprehension(storyId, updatedState);
+
+    progressiveScans.delete(storyId);
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('lore:progressive-scan-complete', { storyId });
+    }
+
+    return { success: true, state: updatedState };
+  } catch (e) {
+    console.error('[Main] Progressive scan failed:', e.message);
+    progressiveScans.delete(storyId);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('lore:pause-progressive-scan', (event, { storyId }) => {
+  const ctrl = progressiveScans.get(storyId);
+  if (ctrl) ctrl.pause = true;
+  return { success: !!ctrl };
+});
+
+ipcMain.handle('lore:resume-progressive-scan', (event, { storyId }) => {
+  const ctrl = progressiveScans.get(storyId);
+  if (ctrl) ctrl.pause = false;
+  return { success: !!ctrl };
+});
+
+ipcMain.handle('lore:cancel-progressive-scan', (event, { storyId }) => {
+  const ctrl = progressiveScans.get(storyId);
+  if (ctrl) ctrl.cancel = true;
+  return { success: !!ctrl };
+});
+
+ipcMain.handle('lore:get-comprehension', (event, storyId) => {
+  const state = db.getComprehension(storyId);
+  if (state) {
+    console.log(`[Main] Found comprehension for ${storyId}: masterSummary=${!!state.masterSummary}, entities=${Object.keys(state.entityProfiles || {}).length}`);
+  } else {
+    console.log(`[Main] No comprehension data for story ${storyId}`);
+  }
+  return state;
+});
+
+ipcMain.handle('lore:incremental-update', async (event, { storyId, storyText }) => {
+  try {
+    const generateTextFn = makeLoreGenerateTextFn();
+    const existingState = db.getComprehension(storyId) || null;
+
+    const updatedState = await loreComprehension.incrementalUpdate(
+      storyText, existingState, generateTextFn
+    );
+
+    db.setComprehension(storyId, updatedState);
+
+    return { success: true, state: updatedState };
+  } catch (e) {
+    console.error('[Main] Incremental update failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+// ---------------------------------------------------------------------------
+// IPC Handlers — Memory Manager
+// ---------------------------------------------------------------------------
+
+const memoryProcessingLock = new Set();
+
+ipcMain.handle('memory:process', async (event, { storyText, storyId }) => {
+  if (memoryProcessingLock.has(storyId)) {
+    return { success: false, error: 'Already processing' };
+  }
+  memoryProcessingLock.add(storyId);
+  try {
+    const settings = { ...memoryManager.DEFAULT_SETTINGS, ...store.get('memorySettings') };
+    const state = db.getMemoryState(storyId) || memoryManager.createEmptyState();
+    const generateTextFn = makeLoreGenerateTextFn();
+
+    // Build comprehension context if available
+    let comprehensionContext = '';
+    const compState = db.getComprehension(storyId);
+    if (compState && compState.masterSummary) {
+      comprehensionContext = loreComprehension.formatComprehensionContext(
+        compState.masterSummary, compState.entityProfiles
+      );
+    }
+
+    const result = await memoryManager.processNewContent(
+      storyText, state, settings, generateTextFn, comprehensionContext || undefined
+    );
+
+    db.setMemoryState(storyId, result.updatedState);
+
+    return { success: true, memoryText: result.memoryText, state: result.updatedState };
+  } catch (e) {
+    console.error('[Main] Memory process failed:', e.message);
+    return { success: false, error: e.message };
+  } finally {
+    memoryProcessingLock.delete(storyId);
+  }
+});
+
+ipcMain.handle('memory:force-refresh', async (event, { storyText, storyId }) => {
+  if (memoryProcessingLock.has(storyId)) {
+    return { success: false, error: 'Already processing' };
+  }
+  memoryProcessingLock.add(storyId);
+  try {
+    const settings = { ...memoryManager.DEFAULT_SETTINGS, ...store.get('memorySettings') };
+    const generateTextFn = makeLoreGenerateTextFn();
+
+    // Check for secondary provider (hybrid) — respects lore settings toggle
+    let secondaryGenerateTextFn = null;
+    const loreSettings = store.get('loreSettings') || {};
+    if (loreSettings.hybridEnabled !== false) {
+      const primaryProvider = store.get('loreLlmProvider') || 'novelai';
+      if (primaryProvider === 'novelai') {
+        if (await isOllamaAvailable()) {
+          secondaryGenerateTextFn = makeOllamaGenerateTextFn();
+          console.log('[Main] Memory refresh: hybrid mode (NovelAI + Ollama)');
+        }
+      } else {
+        secondaryGenerateTextFn = makeNovelaiGenerateTextFn();
+        console.log('[Main] Memory refresh: hybrid mode (Ollama + NovelAI)');
+      }
+    }
+
+    let comprehensionContext = '';
+    const compState = db.getComprehension(storyId);
+    if (compState && compState.masterSummary) {
+      comprehensionContext = loreComprehension.formatComprehensionContext(
+        compState.masterSummary, compState.entityProfiles
+      );
+    }
+
+    const result = await memoryManager.forceRefresh(
+      storyText, settings, generateTextFn,
+      (progress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('memory:progress', progress);
+        }
+      },
+      comprehensionContext || undefined,
+      secondaryGenerateTextFn
+    );
+
+    db.setMemoryState(storyId, result.updatedState);
+
+    return { success: true, memoryText: result.memoryText, state: result.updatedState };
+  } catch (e) {
+    console.error('[Main] Memory force-refresh failed:', e.message);
+    return { success: false, error: e.message };
+  } finally {
+    memoryProcessingLock.delete(storyId);
+  }
+});
+
+ipcMain.handle('memory:clear', (event, { storyId }) => {
+  db.setMemoryState(storyId, memoryManager.createEmptyState());
+  return { success: true };
+});
+
+ipcMain.handle('memory:get-state', (event, storyId) => {
+  return db.getMemoryState(storyId) || memoryManager.createEmptyState();
+});
+
+ipcMain.handle('memory:set-state', (event, { storyId, state }) => {
+  db.setMemoryState(storyId, state);
+  return { success: true };
+});
+
+ipcMain.handle('memory:get-settings', () => {
+  return { ...memoryManager.DEFAULT_SETTINGS, ...store.get('memorySettings') };
+});
+
+ipcMain.handle('memory:set-settings', (event, settings) => {
+  store.set('memorySettings', settings);
+  return { success: true };
+});
+
+// IPC Handlers — LitRPG
+
+ipcMain.handle('litrpg:detect', async (event, { storyText, storyId }) => {
+  try {
+    const generateTextFn = makeLoreGenerateTextFn();
+    const result = await litrpgTracker.detectLitRPG(storyText, generateTextFn);
+    // Save detection result
+    const rpgState = db.getLitrpgState(storyId) || { ...db.LITRPG_STATE_DEFAULTS };
+    rpgState.detected = result.detected;
+    rpgState.systemType = result.systemType;
+    db.setLitrpgState(storyId, rpgState);
+    return { success: true, ...result };
+  } catch (e) {
+    console.error('[Main] LitRPG detection failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('litrpg:scan', async (event, { storyText, storyId, loreEntries }) => {
+  try {
+    const rpgState = db.getLitrpgState(storyId) || { ...db.LITRPG_STATE_DEFAULTS };
+    if (!rpgState.enabled) return { success: false, error: 'LitRPG mode not enabled' };
+
+    const generateTextFn = makeLoreGenerateTextFn();
+
+    // Check for secondary provider
+    let secondaryGenerateTextFn = null;
+    const loreSettings = store.get('loreSettings') || {};
+    if (loreSettings.hybridEnabled !== false) {
+      const primaryProvider = store.get('loreLlmProvider') || 'novelai';
+      if (primaryProvider === 'novelai') {
+        if (await isOllamaAvailable()) secondaryGenerateTextFn = makeOllamaGenerateTextFn();
+      } else {
+        secondaryGenerateTextFn = makeNovelaiGenerateTextFn();
+      }
+    }
+
+    // Build comprehension context
+    let comprehensionContext = '';
+    const compState = db.getComprehension(storyId);
+    if (compState && compState.masterSummary) {
+      comprehensionContext = loreComprehension.formatComprehensionContext(
+        compState.masterSummary, compState.entityProfiles
+      );
+    }
+
+    const result = await litrpgTracker.scanForRPGData(
+      storyText, rpgState, loreEntries || [], generateTextFn,
+      (progress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('litrpg:scan-progress', progress);
+        }
+      },
+      comprehensionContext || undefined,
+      secondaryGenerateTextFn
+    );
+
+    db.setLitrpgState(storyId, result.state);
+    return { success: true, state: result.state };
+  } catch (e) {
+    console.error('[Main] LitRPG scan failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('litrpg:get-state', (event, storyId) => {
+  return db.getLitrpgState(storyId);
+});
+
+ipcMain.handle('litrpg:set-state', (event, { storyId, state }) => {
+  db.setLitrpgState(storyId, state);
+  return { success: true };
+});
+
+ipcMain.handle('litrpg:accept-update', (event, { storyId, updateId }) => {
+  const rpgState = db.getLitrpgState(storyId);
+  if (!rpgState) return { success: false, error: 'No LitRPG state' };
+  const updated = litrpgTracker.acceptPendingUpdate(rpgState, updateId);
+  db.setLitrpgState(storyId, updated);
+  return { success: true, state: updated };
+});
+
+ipcMain.handle('litrpg:reject-update', (event, { storyId, updateId }) => {
+  const rpgState = db.getLitrpgState(storyId);
+  if (!rpgState) return { success: false, error: 'No LitRPG state' };
+  const updated = litrpgTracker.rejectPendingUpdate(rpgState, updateId);
+  db.setLitrpgState(storyId, updated);
+  return { success: true, state: updated };
+});
+
+ipcMain.handle('litrpg:build-lorebook-text', (event, { entryText, rpgData }) => {
+  return litrpgTracker.buildLitRPGCharacterText(entryText, rpgData);
+});
+
+ipcMain.handle('litrpg:generate-portrait-prompt', async (event, { characterEntryText, rpgData }) => {
+  try {
+    const generateTextFn = makeLoreGenerateTextFn();
+    const prompt = await litrpgTracker.generatePortraitPrompt(characterEntryText, rpgData, generateTextFn);
+    return { success: true, prompt };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// IPC Handlers — Portraits
+
+ipcMain.handle('portrait:generate', async (event, { storyId, characterId, characterEntry, rpgData }) => {
+  try {
+    // Generate prompt from character data
+    const generateTextFn = makeLoreGenerateTextFn();
+    const prompt = await litrpgTracker.generatePortraitPrompt(
+      typeof characterEntry === 'string' ? characterEntry : (characterEntry || ''),
+      rpgData || {},
+      generateTextFn
+    );
+    if (!prompt) return { success: false, error: 'Failed to generate portrait prompt' };
+
+    // Generate image via active provider
+    const providerId = store.get('provider') || 'novelai';
+    const provider = PROVIDERS[providerId];
+    if (!provider) return { success: false, error: 'No active image provider' };
+
+    const imageData = await provider.generate(prompt, '', store);
+    const base64 = imageData.replace(/^data:image\/[^;]+;base64,/, '');
+    const buffer = Buffer.from(base64, 'base64');
+
+    portraitManager.savePortrait(storyId, characterId, buffer);
+
+    return {
+      success: true,
+      imageData,
+      thumbnailData: portraitManager.getPortraitAsBase64(storyId, characterId, true),
+    };
+  } catch (e) {
+    console.error('[Main] Portrait generate failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('portrait:upload', async (event, { storyId, characterId }) => {
+  const { dialog } = require('electron');
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+    properties: ['openFile'],
+  });
+  if (canceled || filePaths.length === 0) return { success: false };
+  const buffer = fs.readFileSync(filePaths[0]);
+  portraitManager.savePortrait(storyId, characterId, buffer);
+  return {
+    success: true,
+    imageData: portraitManager.getPortraitAsBase64(storyId, characterId),
+    thumbnailData: portraitManager.getPortraitAsBase64(storyId, characterId, true),
+  };
+});
+
+ipcMain.handle('portrait:get', (event, { storyId, characterId, thumbnail }) => {
+  return portraitManager.getPortraitAsBase64(storyId, characterId, !!thumbnail);
+});
+
+ipcMain.handle('portrait:delete', (event, { storyId, characterId }) => {
+  portraitManager.deletePortrait(storyId, characterId);
+  return { success: true };
+});
+
+// IPC Handlers — Story bulk load (SQLite)
+ipcMain.handle('story:load-all', (event, { storyId, storyTitle }) => {
+  db.upsertStory(storyId, storyTitle || '');
+  return db.loadAllStoryData(storyId);
+});
+
 // IPC Handlers — Storyboard
 ipcMain.handle('storyboard:list', () => storyboard.list());
 ipcMain.handle('storyboard:create', (event, name) => storyboard.create(name));
@@ -618,8 +1670,32 @@ ipcMain.handle('storyboard:associate-with-story', (event, { storyboardId, storyI
 ipcMain.handle('storyboard:dissociate-from-story', (event, { storyboardId }) => storyboard.dissociateFromStory(storyboardId));
 
 app.whenReady().then(() => {
+  // Initialize SQLite database
+  db.init(app.getPath('userData'));
+
+  // Initialize portrait manager
+  portraitManager.init(app.getPath('userData'));
+
+  // One-time migration from electron-store to SQLite
+  if (!store.get('migratedToSqlite')) {
+    console.log('[Main] Migrating per-story data from electron-store to SQLite...');
+    db.migrateFromStore(store);
+    store.set('migratedToSqlite', true);
+    console.log('[Main] Migration complete');
+  }
+
   setupTokenInterception();
   createWindow();
+
+  // Register keyboard shortcut to open webview DevTools for DOM inspection
+  globalShortcut.register('CommandOrControl+Shift+I', () => {
+    const allContents = webContents.getAllWebContents();
+    const wv = allContents.find(wc => wc.getURL().includes('novelai.net'));
+    if (wv) {
+      wv.openDevTools({ mode: 'detach' });
+      console.log('[Main] Opened webview DevTools via shortcut');
+    }
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -632,4 +1708,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('will-quit', () => {
+  db.close();
 });

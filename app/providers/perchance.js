@@ -535,7 +535,7 @@ module.exports = {
       if (generateData.status === 'invalid_key') {
         if (!invalidKeyRetried) {
           invalidKeyRetried = true;
-          console.log('[Perchance] Key rejected, attempting re-extraction via system Chrome...');
+          console.log('[Perchance] Key rejected, attempting re-extraction...');
           const freshKey = await extractPerchanceKey(store);
           if (freshKey) {
             userKey = freshKey;

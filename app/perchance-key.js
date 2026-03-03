@@ -6,6 +6,8 @@ const fs = require('fs');
 const os = require('os');
 const WebSocket = require('ws');
 
+const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
 // Chrome binary paths per platform
 function findChromePath() {
   const candidates = process.platform === 'darwin'
@@ -34,7 +36,6 @@ function findChromePath() {
   });
 }
 
-// Fetch JSON from an HTTP URL (for CDP endpoint discovery)
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
     http.get(url, (res) => {
@@ -48,7 +49,6 @@ function fetchJSON(url) {
   });
 }
 
-// Wait for Chrome's debug port to become available
 async function waitForDebugPort(port, maxWait = 15000) {
   const start = Date.now();
   while (Date.now() - start < maxWait) {
@@ -63,15 +63,15 @@ async function waitForDebugPort(port, maxWait = 15000) {
 }
 
 /**
- * Extract a Perchance userKey by launching the system's Chrome browser
- * with remote debugging, then intercepting network requests via CDP.
- * Uses browser-level auto-attach to monitor ALL targets (including
- * cross-origin iframes where the actual generation requests originate).
+ * Extract a Perchance userKey via system Chrome + CDP.
+ * Launches Chrome with remote debugging, auto-attaches to all targets
+ * (including cross-origin iframes), monitors network for userKey,
+ * and auto-clicks the Generate button via Runtime.evaluate on iframe targets.
  */
 async function extractPerchanceKeyViaChrome(store) {
   const chromePath = findChromePath();
   if (!chromePath) {
-    console.log('[PerchanceKey] No system Chrome found, cannot use Chrome extraction');
+    console.log('[PerchanceKey] No system Chrome found');
     return null;
   }
 
@@ -106,7 +106,6 @@ async function extractPerchanceKeyViaChrome(store) {
     if (!chromeExited) {
       try { chrome.kill(); } catch {}
     }
-    // Clean up temp dir after a delay
     setTimeout(() => {
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
     }, 2000);
@@ -114,6 +113,7 @@ async function extractPerchanceKeyViaChrome(store) {
 
   return new Promise(async (resolve) => {
     let resolved = false;
+    let ws;
 
     function done(key) {
       if (resolved) return;
@@ -129,16 +129,12 @@ async function extractPerchanceKeyViaChrome(store) {
       resolve(key || null);
     }
 
-    // Timeout — 2 minutes for user to complete Cloudflare + click Generate
     const timeout = setTimeout(() => {
       console.log('[PerchanceKey] Chrome extraction timed out');
       done(null);
-    }, 120000);
-
-    let ws;
+    }, 90000);
 
     try {
-      // Wait for Chrome debug port
       console.log(`[PerchanceKey] Waiting for Chrome debug port ${debugPort}...`);
       const ready = await waitForDebugPort(debugPort);
       if (!ready) {
@@ -147,8 +143,6 @@ async function extractPerchanceKeyViaChrome(store) {
         return;
       }
 
-      // Connect to the BROWSER-level WebSocket (not a page target)
-      // This lets us auto-attach to all targets including cross-origin iframes
       const version = await fetchJSON(`http://127.0.0.1:${debugPort}/json/version`);
       const browserWsUrl = version.webSocketDebuggerUrl;
 
@@ -162,30 +156,16 @@ async function extractPerchanceKeyViaChrome(store) {
         ws.send(JSON.stringify(msg));
       }
 
-      ws.on('open', () => {
-        console.log('[PerchanceKey] CDP connected to browser, setting up auto-attach...');
-
-        // Auto-attach to ALL targets (pages, iframes, workers, etc.)
-        // flatten:true gives us sessionIds so we can send commands to each target
-        cdpSend('Target.setAutoAttach', {
-          autoAttach: true,
-          waitForDebuggerOnStart: false,
-          flatten: true,
-        });
-
-        // Also enable network on existing targets
-        // First get all existing targets and attach manually
-        cdpSend('Target.getTargets');
-      });
-
-      // Track sessions we've enabled Network on
+      // Track iframe sessions for auto-click
+      const iframeSessions = new Map(); // sessionId → targetUrl
       const enabledSessions = new Set();
+      let autoClicked = false;
 
       function enableNetworkOnSession(sessionId) {
         if (enabledSessions.has(sessionId)) return;
         enabledSessions.add(sessionId);
         cdpSend('Network.enable', {}, sessionId);
-        console.log(`[PerchanceKey] Network.enable on session ${sessionId.substring(0, 12)}...`);
+        cdpSend('Runtime.enable', {}, sessionId);
       }
 
       function checkForKey(url) {
@@ -199,24 +179,78 @@ async function extractPerchanceKeyViaChrome(store) {
         } catch {}
       }
 
+      /**
+       * Try to auto-click Generate in an iframe session via Runtime.evaluate.
+       */
+      function tryAutoClickInSession(sessionId) {
+        if (autoClicked || resolved) return;
+        const clickScript = `
+          (function() {
+            var ta = document.querySelector('textarea');
+            if (ta) {
+              var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+              if (setter) {
+                setter.call(ta, 'test');
+                ta.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+            }
+            var btns = document.querySelectorAll('button');
+            for (var b of btns) {
+              if (b.textContent.toLowerCase().includes('generate')) {
+                b.click();
+                return 'clicked';
+              }
+            }
+            return 'no_button';
+          })()
+        `;
+        cdpSend('Runtime.evaluate', { expression: clickScript, returnByValue: true }, sessionId);
+      }
+
+      ws.on('open', () => {
+        console.log('[PerchanceKey] CDP connected, setting up auto-attach...');
+        cdpSend('Target.setAutoAttach', {
+          autoAttach: true,
+          waitForDebuggerOnStart: false,
+          flatten: true,
+        });
+        cdpSend('Target.getTargets');
+      });
+
       ws.on('message', (raw) => {
         try {
           const msg = JSON.parse(raw.toString());
 
-          // When a new target is auto-attached, enable Network monitoring on it
+          // New target attached — enable Network + Runtime monitoring
           if (msg.method === 'Target.attachedToTarget') {
             const sessionId = msg.params.sessionId;
             const targetInfo = msg.params.targetInfo;
-            console.log(`[PerchanceKey] Attached to target: ${targetInfo.type} - ${targetInfo.url?.substring(0, 60)}`);
+            console.log(`[PerchanceKey] Attached to target: ${targetInfo.type} - ${targetInfo.url?.substring(0, 80)}`);
             enableNetworkOnSession(sessionId);
+
+            // Track iframe targets that look like the generator
+            if (targetInfo.url && targetInfo.url.includes('perchance.org/ai-text-to-image')) {
+              iframeSessions.set(sessionId, targetInfo.url);
+              // Delay auto-click to let page JS initialize
+              setTimeout(() => tryAutoClickInSession(sessionId), 3000);
+              setTimeout(() => tryAutoClickInSession(sessionId), 6000);
+              setTimeout(() => tryAutoClickInSession(sessionId), 10000);
+              setTimeout(() => tryAutoClickInSession(sessionId), 15000);
+            }
           }
 
-          // Network request from any session — check for userKey
+          // Network request — check for userKey
           if (msg.method === 'Network.requestWillBeSent') {
             checkForKey(msg.params.request.url);
           }
 
-          // Also handle the getTargets response to attach to existing targets
+          // Runtime.evaluate response — check if auto-click succeeded
+          if (msg.result?.result?.value === 'clicked' && !autoClicked) {
+            autoClicked = true;
+            console.log('[PerchanceKey] Auto-clicked Generate via CDP');
+          }
+
+          // Handle getTargets response
           if (msg.id && msg.result?.targetInfos) {
             for (const target of msg.result.targetInfos) {
               if (target.type === 'page' || target.type === 'iframe') {
@@ -238,10 +272,7 @@ async function extractPerchanceKeyViaChrome(store) {
         console.log('[PerchanceKey] CDP connection closed');
       });
 
-      // If Chrome exits before we get the key (user closed it)
-      chrome.on('exit', () => {
-        done(null);
-      });
+      chrome.on('exit', () => { done(null); });
 
     } catch (err) {
       console.error('[PerchanceKey] Chrome extraction error:', err);
@@ -251,12 +282,10 @@ async function extractPerchanceKeyViaChrome(store) {
 }
 
 /**
- * Fallback: Extract key using Electron's built-in BrowserWindow.
- * May fail if Perchance's anti-bot detection catches it.
+ * Fallback: Extract key using Electron BrowserWindow.
+ * Window must be visible for Turnstile — may still fail.
  */
 async function extractPerchanceKeyViaElectron(store) {
-  const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
   return new Promise((resolve) => {
     const partition = 'persist:perchance-api';
     const ses = session.fromPartition(partition);
@@ -310,19 +339,32 @@ async function extractPerchanceKeyViaElectron(store) {
         console.log('[PerchanceKey] Electron extraction timed out');
         finish(null);
       }
-    }, 90000);
+    }, 120000);
 
     win.webContents.on('did-finish-load', () => {
       win.show();
       win.webContents.executeJavaScript(`
         (function() {
           if (document.getElementById('sv-extract-banner')) return;
-          const banner = document.createElement('div');
+          var banner = document.createElement('div');
           banner.id = 'sv-extract-banner';
-          banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;background:#e94560;color:white;padding:12px 20px;font-family:sans-serif;font-size:15px;text-align:center;font-weight:bold;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
-          banner.textContent = 'Click "Generate" below once, then this window will close automatically.';
+          banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;background:#e94560;color:white;padding:14px 20px;font-family:sans-serif;font-size:15px;text-align:center;font-weight:bold;box-shadow:0 2px 8px rgba(0,0,0,0.3);line-height:1.5;';
+          banner.innerHTML = 'Scene Visualizer — Key Extraction<br><span style="font-weight:normal;font-size:13px;">1. Wait for the page to fully load &nbsp; 2. Click <b>Generate</b> &nbsp; 3. This window closes automatically</span>';
           document.body.appendChild(banner);
-          document.body.style.paddingTop = '48px';
+          document.body.style.paddingTop = '64px';
+
+          function tryFillPrompt() {
+            var ta = document.querySelector('textarea[placeholder*="prompt"], textarea[placeholder*="Prompt"], textarea.prompt');
+            if (!ta) ta = document.querySelector('textarea');
+            if (ta) {
+              var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+              nativeSetter.call(ta, 'a scenic mountain landscape');
+              ta.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+          }
+          tryFillPrompt();
+          setTimeout(tryFillPrompt, 2000);
+          setTimeout(tryFillPrompt, 5000);
         })()
       `).catch(() => {});
     });
@@ -345,19 +387,19 @@ async function extractPerchanceKeyViaElectron(store) {
 /**
  * Main extraction entry point. Tries system Chrome first (Turnstile/CF
  * challenges pass reliably in real Chrome but always fail in Electron).
- * Falls back to Electron BrowserWindow only if Chrome is unavailable.
+ * Falls back to Electron BrowserWindow if Chrome is unavailable.
  */
 async function extractPerchanceKey(store) {
-  // Try system Chrome first — Turnstile cannot be solved in Electron
   const chromePath = findChromePath();
   if (chromePath) {
     console.log('[PerchanceKey] Attempting extraction via system Chrome...');
     const chromeKey = await extractPerchanceKeyViaChrome(store);
     if (chromeKey) return chromeKey;
+    console.log('[PerchanceKey] Chrome extraction failed, falling back to Electron...');
+  } else {
+    console.log('[PerchanceKey] No system Chrome found, using Electron fallback...');
   }
 
-  // Fallback to Electron BrowserWindow (may fail if Turnstile blocks it)
-  console.log('[PerchanceKey] Chrome unavailable or failed, trying Electron...');
   const electronKey = await extractPerchanceKeyViaElectron(store);
   if (electronKey) return electronKey;
 
@@ -366,11 +408,6 @@ async function extractPerchanceKey(store) {
 
 /**
  * Check if a stored userKey is still valid.
- * Returns: 'valid', 'not_verified', or 'unknown' (if CF blocks / network error).
- * The image-generation.perchance.org domain is behind Cloudflare. Raw fetch()
- * from the main process has no CF clearance, so we must treat blocked responses
- * as "unknown" rather than "invalid" — the actual generation path uses browserFetch
- * which has CF cookies and will surface the real status.
  */
 async function verifyPerchanceKey(userKey) {
   try {
@@ -378,7 +415,6 @@ async function verifyPerchanceKey(userKey) {
     const response = await fetch(url);
     const text = await response.text();
 
-    // Cloudflare challenge page — can't verify, assume valid
     if (text.includes('Just a moment') || text.includes('cf_chl_opt') || text.includes('challenge-platform')) {
       console.log('[PerchanceKey] Verification blocked by Cloudflare, assuming key is valid');
       return 'unknown';
@@ -390,7 +426,6 @@ async function verifyPerchanceKey(userKey) {
 
     return 'valid';
   } catch (e) {
-    // Network error / Cloudflare redirect — can't verify
     console.log('[PerchanceKey] Verification request failed (likely CF):', e.message);
     return 'unknown';
   }

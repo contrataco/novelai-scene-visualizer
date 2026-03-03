@@ -10,7 +10,8 @@
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
-    "build:all": "electron-builder --mac --win --linux"
+    "build:all": "electron-builder --mac --win --linux",
+    "postinstall": "electron-rebuild -f -w better-sqlite3 || true"
   },
   "author": "contrataco",
   "license": "MIT",
@@ -20,12 +21,14 @@
     "directory": "apps/scene-visualizer"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
     "7zip-bin": "^5.2.0",
     "electron": "28.3.3",
     "electron-builder": "^24.9.1"
   },
   "dependencies": {
     "adm-zip": "^0.5.10",
+    "better-sqlite3": "^12.6.2",
     "electron-store": "^8.1.0",
     "ws": "^8.19.0"
   },
@@ -37,6 +40,7 @@
     },
     "files": [
       "main.js",
+      "db.js",
       "preload.js",
       "webview-preload.js",
       "storyboard.js",
