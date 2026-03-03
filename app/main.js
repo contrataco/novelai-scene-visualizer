@@ -1606,7 +1606,8 @@ ipcMain.handle('portrait:generate', async (event, { storyId, characterId, charac
     if (!provider) return { success: false, error: 'No active image provider' };
 
     const imageData = await provider.generate(prompt, '', store);
-    const buffer = Buffer.from(imageData, 'base64');
+    const base64 = imageData.replace(/^data:image\/[^;]+;base64,/, '');
+    const buffer = Buffer.from(base64, 'base64');
 
     portraitManager.savePortrait(storyId, characterId, buffer);
 
