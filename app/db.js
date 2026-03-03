@@ -151,6 +151,7 @@ const LITRPG_STATE_DEFAULTS = {
   enabled: false, detected: null, systemType: 'generic', dismissedDetection: false,
   characters: {}, quests: {}, party: { members: [], lastUpdated: null },
   pendingUpdates: [], lastProcessedLength: 0, lastScanAt: null, charsSinceLastScan: 0,
+  autoScan: true, autoSync: false, globalInventory: [], globalCurrency: {},
 };
 
 function getLitrpgState(storyId) {

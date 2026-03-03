@@ -296,7 +296,7 @@ function isContentRestrictionError(errorMessage) {
 // Model fallback helper (Venice / Pollo only)
 // ---------------------------------------------------------------------------
 
-async function tryModelFallback(provider, providerId, prompt, negativePrompt) {
+async function tryModelFallback(provider, providerId, prompt, negativePrompt, genOpts = {}) {
   // NovelAI model fallback via provider's fallback chain
   if (providerId === 'novelai' && typeof provider.getModelFallbackOrder === 'function') {
     const settings = store.get('imageSettings');
@@ -307,7 +307,7 @@ async function tryModelFallback(provider, providerId, prompt, negativePrompt) {
       console.log(`[Main] NovelAI fallback: trying ${fallbackModel} (was: ${currentModel})`);
       store.set('imageSettings', { ...settings, model: fallbackModel });
       try {
-        const imageData = await provider.generate(prompt, negativePrompt, store);
+        const imageData = await provider.generate(prompt, negativePrompt, store, genOpts);
         if (!isBlankImage(imageData)) {
           return { imageData, fallbackModel };
         }
@@ -345,7 +345,7 @@ async function tryModelFallback(provider, providerId, prompt, negativePrompt) {
 
   store.set(modelStoreKey, fallback.id);
   try {
-    const imageData = await provider.generate(prompt, negativePrompt, store);
+    const imageData = await provider.generate(prompt, negativePrompt, store, genOpts);
     if (!isBlankImage(imageData)) {
       return { imageData, fallbackModel: fallback.id };
     }
@@ -363,7 +363,16 @@ async function tryModelFallback(provider, providerId, prompt, negativePrompt) {
 // IPC Handlers — Image generation (with retry + model fallback)
 // ---------------------------------------------------------------------------
 
-ipcMain.handle('generate-image', async (event, { prompt, negativePrompt }) => {
+// IPC Handler — Get the prompt suffix (art style + quality tags) that the provider would append
+ipcMain.handle('get-prompt-suffix', () => {
+  const provider = getActiveProvider();
+  if (provider.getPromptSuffix) {
+    return provider.getPromptSuffix(store);
+  }
+  return { artStyleSuffix: '', qualitySuffix: '', combined: '' };
+});
+
+ipcMain.handle('generate-image', async (event, { prompt, negativePrompt, rawPrompt }) => {
   const provider = getActiveProvider();
   const providerId = store.get('provider') || 'novelai';
   const settings = store.get('imageSettings');
@@ -375,12 +384,13 @@ ipcMain.handle('generate-image', async (event, { prompt, negativePrompt }) => {
     ...extra,
   });
 
+  const genOpts = rawPrompt ? { rawPrompt: true } : {};
   let lastError = null;
 
   // --- Attempt 1: normal generation ---
   try {
-    console.log(`[Main] Generating via ${provider.name}...`);
-    const imageData = await provider.generate(prompt, negativePrompt, store);
+    console.log(`[Main] Generating via ${provider.name}...${rawPrompt ? ' (raw prompt, no suffix)' : ''}`);
+    const imageData = await provider.generate(prompt, negativePrompt, store, genOpts);
     if (!isBlankImage(imageData)) {
       return { success: true, imageData, meta: makeMeta() };
     }
@@ -389,7 +399,7 @@ ipcMain.handle('generate-image', async (event, { prompt, negativePrompt }) => {
     lastError = e;
     console.error('[Main] Generation attempt 1 failed:', e.message);
     if (isContentRestrictionError(e.message)) {
-      const fb = await tryModelFallback(provider, providerId, prompt, negativePrompt);
+      const fb = await tryModelFallback(provider, providerId, prompt, negativePrompt, genOpts);
       if (fb) {
         return {
           success: true,
@@ -403,7 +413,7 @@ ipcMain.handle('generate-image', async (event, { prompt, negativePrompt }) => {
 
   // --- Attempt 2: retry (blank image or transient error) ---
   try {
-    const imageData = await provider.generate(prompt, negativePrompt, store);
+    const imageData = await provider.generate(prompt, negativePrompt, store, genOpts);
     if (!isBlankImage(imageData)) {
       return { success: true, imageData, meta: makeMeta({ retried: true }) };
     }
@@ -412,7 +422,7 @@ ipcMain.handle('generate-image', async (event, { prompt, negativePrompt }) => {
     lastError = e;
     console.error('[Main] Generation attempt 2 failed:', e.message);
     if (isContentRestrictionError(e.message)) {
-      const fb = await tryModelFallback(provider, providerId, prompt, negativePrompt);
+      const fb = await tryModelFallback(provider, providerId, prompt, negativePrompt, genOpts);
       if (fb) {
         return {
           success: true,
@@ -425,7 +435,7 @@ ipcMain.handle('generate-image', async (event, { prompt, negativePrompt }) => {
   }
 
   // --- Attempt 3: model fallback ---
-  const fb = await tryModelFallback(provider, providerId, prompt, negativePrompt);
+  const fb = await tryModelFallback(provider, providerId, prompt, negativePrompt, genOpts);
   if (fb) {
     return {
       success: true,
@@ -621,6 +631,26 @@ ipcMain.handle('set-image-settings', (event, settings) => {
   return { success: true };
 });
 
+// Scene settings (prompt generation, suggestions)
+const SCENE_SETTINGS_DEFAULTS = {
+  autoGeneratePrompts: true,
+  useCharacterLore: true,
+  artStyleTags: '',
+  minTextChange: 50,
+  promptTemperature: 0.7,
+  suggestionStyle: 'mixed',
+  suggestionTemperature: 0.6,
+};
+
+ipcMain.handle('get-scene-settings', () => {
+  return { ...SCENE_SETTINGS_DEFAULTS, ...store.get('sceneSettings') };
+});
+
+ipcMain.handle('set-scene-settings', (event, settings) => {
+  store.set('sceneSettings', settings);
+  return { success: true };
+});
+
 // IPC Handler — Electron-side suggestion generation (parallel with script's image prompt)
 ipcMain.handle('generate-suggestions-direct', async (event, data) => {
   try {
@@ -637,19 +667,24 @@ ipcMain.handle('generate-suggestions-direct', async (event, data) => {
     }
 
     const provider = PROVIDERS.novelai;
+    const sceneSettings = { ...SCENE_SETTINGS_DEFAULTS, ...store.get('sceneSettings') };
     const narrativeBlock = narrativeContext
       ? `\nNARRATIVE CONTEXT:\n${narrativeContext}\n\nUse established characters, situations, and relationships.`
       : '';
+
+    // Build style instruction based on suggestion style setting
+    const styleInstructions = {
+      brief: 'Keep ALL suggestions brief: 1-2 sentences each.',
+      detailed: 'Make ALL suggestions detailed: 3-5 sentences each with rich description.',
+      mixed: 'Vary the format naturally based on what fits the story moment:\n- For action scenes: Brief 1-2 sentence prompts\n- For dialogue moments: A character line with brief context\n- For dramatic beats: Longer 2-4 sentence continuations',
+    };
 
     const messages = [
       {
         role: 'system',
         content: `You are a creative writing assistant helping with interactive fiction. Generate exactly 3 different, compelling story continuation suggestions.
 
-Vary the format naturally based on what fits the story moment:
-- For action scenes: Brief 1-2 sentence prompts
-- For dialogue moments: A character line with brief context
-- For dramatic beats: Longer 2-4 sentence continuations
+${styleInstructions[sceneSettings.suggestionStyle] || styleInstructions.mixed}
 
 Each suggestion should:
 - Feel natural as something the user might type
@@ -672,7 +707,7 @@ Types: "action" for physical actions, "dialogue" for speech, "narrative" for des
     const response = await provider.generateText(messages, {
       model: 'glm-4-6',
       max_tokens: 300,
-      temperature: 0.6,
+      temperature: sceneSettings.suggestionTemperature,
     }, store);
 
     let content = '';
@@ -721,8 +756,9 @@ Types: "action" for physical actions, "dialogue" for speech, "narrative" for des
 ipcMain.handle('generate-scene-prompt', async (event, { storyText, entries, artStyle, storyId }) => {
   try {
     const provider = PROVIDERS.novelai;
+    const sceneSettings = { ...SCENE_SETTINGS_DEFAULTS, ...store.get('sceneSettings') };
 
-    // 1. Extract character appearances from lorebook entries
+    // 1. Extract character appearances from lorebook entries (skip if disabled)
     const appearancePatterns = [
       /appearance[:\s]+([^.]+(?:\.[^.]+){0,3})/i,
       /physical(?:\s+description)?[:\s]+([^.]+(?:\.[^.]+){0,3})/i,
@@ -733,29 +769,31 @@ ipcMain.handle('generate-scene-prompt', async (event, { storyText, entries, artS
     const visualKeywords = ['hair', 'eyes', 'tall', 'short', 'wears', 'wearing', 'dressed', 'skin', 'face', 'build'];
     const characters = [];
 
-    for (const entry of (entries || [])) {
-      if (entry.enabled === false) continue;
-      const text = entry.text || '';
-      const displayName = entry.displayName || '';
-      const keys = entry.keys || [];
-      let appearance = '';
+    if (sceneSettings.useCharacterLore) {
+      for (const entry of (entries || [])) {
+        if (entry.enabled === false) continue;
+        const text = entry.text || '';
+        const displayName = entry.displayName || '';
+        const keys = entry.keys || [];
+        let appearance = '';
 
-      for (const pattern of appearancePatterns) {
-        const match = text.match(pattern);
-        if (match && match[1]) {
-          appearance = match[1].trim();
-          break;
+        for (const pattern of appearancePatterns) {
+          const match = text.match(pattern);
+          if (match && match[1]) {
+            appearance = match[1].trim();
+            break;
+          }
         }
-      }
 
-      if (!appearance && text.length < 500) {
-        const hasVisual = visualKeywords.some(kw => text.toLowerCase().includes(kw));
-        if (hasVisual) appearance = text;
-      }
+        if (!appearance && text.length < 500) {
+          const hasVisual = visualKeywords.some(kw => text.toLowerCase().includes(kw));
+          if (hasVisual) appearance = text;
+        }
 
-      if (appearance) {
-        const name = displayName || (keys.length > 0 ? keys[0] : '');
-        if (name) characters.push({ name, appearance: appearance.slice(0, 300) });
+        if (appearance) {
+          const name = displayName || (keys.length > 0 ? keys[0] : '');
+          if (name) characters.push({ name, appearance: appearance.slice(0, 300) });
+        }
       }
     }
 
@@ -771,7 +809,13 @@ ipcMain.handle('generate-scene-prompt', async (event, { storyText, entries, artS
     }
 
     // 4. Build system prompt
-    const style = artStyle || 'anime style, detailed, high quality';
+    // Priority: custom artStyleTags > provider art style (resolved from ID) > fallback
+    const artStyleId = store.get('novelaiArtStyle') || 'no-style';
+    const resolvedArtStyle = provider.getArtStyleTags(artStyleId);
+    const customTags = sceneSettings.artStyleTags || '';
+    // If custom tags match a style ID, resolve to the full tag string
+    const style = (customTags && provider.getArtStyleTags(customTags)) || customTags || resolvedArtStyle || 'anime style, detailed, high quality';
+    console.log(`[Main] Scene prompt style: artStyleId=${artStyleId}, customTags="${customTags}", resolved="${resolvedArtStyle}", final="${style}"`);
     let systemContent = `You are an expert at creating image generation prompts. Analyze story text and create a vivid visual prompt that captures the current scene.
 
 Output ONLY a JSON object with this format:
@@ -782,7 +826,8 @@ Guidelines:
 - Describe characters' appearance, poses, expressions
 - Include setting details (location, lighting, atmosphere)
 - Use comma-separated tags/descriptors
-- Add style tags: ${style}
+- MANDATORY style: Include these exact style tags in the prompt: ${style}
+- Do NOT add any other style tags (no "anime style", "detailed", "high quality" unless they appear above)
 - Keep prompts under 200 words
 - For negativePrompt: list common image generation issues to avoid`;
 
@@ -813,7 +858,7 @@ Guidelines:
     const response = await provider.generateText(messages, {
       model: 'glm-4-6',
       max_tokens: 400,
-      temperature: 0.7,
+      temperature: sceneSettings.promptTemperature,
     }, store);
 
     let content = '';
@@ -1050,9 +1095,9 @@ ipcMain.handle('lore:scan', async (event, { storyText, existingEntries, storyId,
     // Save updated state
     db.setLoreState(storyId, result.state);
 
-    // Chain LitRPG scan if enabled
+    // Chain LitRPG scan if enabled and autoScan is on
     const rpgState = db.getLitrpgState(storyId);
-    if (rpgState && rpgState.enabled) {
+    if (rpgState && rpgState.enabled && rpgState.autoScan !== false) {
       console.log('[Main] Chaining LitRPG scan after lore scan');
       try {
         const rpgResult = await litrpgTracker.scanForRPGData(
@@ -1073,7 +1118,7 @@ ipcMain.handle('lore:scan', async (event, { storyText, existingEntries, storyId,
       } catch (rpgErr) {
         console.error('[Main] Chained LitRPG scan failed:', rpgErr.message);
       }
-    } else if (!rpgState || rpgState.detected === null) {
+    } else if (!rpgState || rpgState.detected === null || rpgState.detected === false) {
       // First scan for this story — run LitRPG detection
       try {
         const detection = await litrpgTracker.detectLitRPG(storyText, generateTextFn);
@@ -1585,6 +1630,48 @@ ipcMain.handle('litrpg:generate-portrait-prompt', async (event, { characterEntry
   } catch (e) {
     return { success: false, error: e.message };
   }
+});
+
+ipcMain.handle('litrpg:accept-all-updates', (event, { storyId }) => {
+  const rpgState = db.getLitrpgState(storyId);
+  if (!rpgState) return { success: false, error: 'No LitRPG state' };
+  const updated = litrpgTracker.acceptAllPendingUpdates(rpgState);
+  db.setLitrpgState(storyId, updated);
+  return { success: true, state: updated };
+});
+
+ipcMain.handle('litrpg:reject-all-updates', (event, { storyId }) => {
+  const rpgState = db.getLitrpgState(storyId);
+  if (!rpgState) return { success: false, error: 'No LitRPG state' };
+  const updated = litrpgTracker.rejectAllPendingUpdates(rpgState);
+  db.setLitrpgState(storyId, updated);
+  return { success: true, state: updated };
+});
+
+ipcMain.handle('litrpg:update-character', (event, { storyId, characterId, updates }) => {
+  const rpgState = db.getLitrpgState(storyId);
+  if (!rpgState) return { success: false, error: 'No LitRPG state' };
+  const char = rpgState.characters[characterId];
+  if (!char) return { success: false, error: 'Character not found' };
+  Object.assign(char, updates, { lastUpdated: Date.now() });
+  db.setLitrpgState(storyId, rpgState);
+  return { success: true, state: rpgState };
+});
+
+ipcMain.handle('litrpg:delete-character', (event, { storyId, characterId }) => {
+  const rpgState = db.getLitrpgState(storyId);
+  if (!rpgState) return { success: false, error: 'No LitRPG state' };
+  delete rpgState.characters[characterId];
+  rpgState.party.members = rpgState.party.members.filter(id => id !== characterId);
+  rpgState.pendingUpdates = rpgState.pendingUpdates.filter(u => u.characterId !== characterId);
+  db.setLitrpgState(storyId, rpgState);
+  return { success: true, state: rpgState };
+});
+
+ipcMain.handle('litrpg:reset-state', (event, { storyId }) => {
+  const freshState = { ...db.LITRPG_STATE_DEFAULTS };
+  db.setLitrpgState(storyId, freshState);
+  return { success: true, state: freshState };
 });
 
 // IPC Handlers — Portraits

@@ -73,6 +73,19 @@ export const polloAspectRatioSelect = document.getElementById('polloAspectRatio'
 // Auto-generate toggle
 export const autoGenerateToggle = document.getElementById('autoGenerateToggle');
 
+// Scene settings elements
+export const sceneAutoGenerate = document.getElementById('sceneAutoGenerate');
+export const sceneUseCharacterLore = document.getElementById('sceneUseCharacterLore');
+export const sceneArtStyleTags = document.getElementById('sceneArtStyleTags');
+export const sceneMinTextChange = document.getElementById('sceneMinTextChange');
+export const sceneMinTextChangeValue = document.getElementById('sceneMinTextChangeValue');
+export const scenePromptTemperature = document.getElementById('scenePromptTemperature');
+export const scenePromptTemperatureValue = document.getElementById('scenePromptTemperatureValue');
+export const sceneSuggestionStyle = document.getElementById('sceneSuggestionStyle');
+export const sceneSuggestionTemperature = document.getElementById('sceneSuggestionTemperature');
+export const sceneSuggestionTemperatureValue = document.getElementById('sceneSuggestionTemperatureValue');
+export const sceneEnableLitrpg = document.getElementById('sceneEnableLitrpg');
+
 // NovelAI token status elements
 export const novelaiTokenDot = document.getElementById('novelaiTokenDot');
 export const novelaiTokenText = document.getElementById('novelaiTokenText');
@@ -262,6 +275,15 @@ export const rpgUpdatesCount = document.getElementById('rpgUpdatesCount');
 export const rpgAutoScan = document.getElementById('rpgAutoScan');
 export const rpgAutoSync = document.getElementById('rpgAutoSync');
 export const rpgDisableBtn = document.getElementById('rpgDisableBtn');
+export const rpgAcceptAllBtn = document.getElementById('rpgAcceptAllBtn');
+export const rpgRejectAllBtn = document.getElementById('rpgRejectAllBtn');
+export const rpgNpcSearch = document.getElementById('rpgNpcSearch');
+export const rpgInventoryList = document.getElementById('rpgInventoryList');
+export const rpgCurrencyList = document.getElementById('rpgCurrencyList');
+export const rpgStatusEffectsList = document.getElementById('rpgStatusEffectsList');
+export const rpgStatOverlay = document.getElementById('rpgStatOverlay');
+export const rpgStatOverlayContent = document.getElementById('rpgStatOverlayContent');
+export const rpgStatOverlayClose = document.getElementById('rpgStatOverlayClose');
 
 // Lore categories
 export const LORE_CATEGORIES = ['character', 'location', 'item', 'faction', 'concept'];

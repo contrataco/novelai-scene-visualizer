@@ -3,8 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Expose secure API to renderer
 contextBridge.exposeInMainWorld('sceneVisualizer', {
   // Image generation
-  generateImage: (prompt, negativePrompt) =>
-    ipcRenderer.invoke('generate-image', { prompt, negativePrompt }),
+  generateImage: (prompt, negativePrompt, opts = {}) =>
+    ipcRenderer.invoke('generate-image', { prompt, negativePrompt, ...opts }),
 
   // Settings
   getApiToken: () => ipcRenderer.invoke('get-api-token'),
@@ -83,6 +83,13 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   onImageReady: (callback) => {
     ipcRenderer.on('image-ready', (event, data) => callback(data));
   },
+  // Scene settings
+  getSceneSettings: () => ipcRenderer.invoke('get-scene-settings'),
+  setSceneSettings: (settings) => ipcRenderer.invoke('set-scene-settings', settings),
+
+  // Prompt suffix (art style + quality tags the provider appends)
+  getPromptSuffix: () => ipcRenderer.invoke('get-prompt-suffix'),
+
   // Electron-side suggestion generation (parallel with script's image prompt)
   generateSuggestionsDirect: (data) => ipcRenderer.invoke('generate-suggestions-direct', data),
 
@@ -180,6 +187,16 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
     ipcRenderer.invoke('litrpg:build-lorebook-text', { entryText, rpgData }),
   litrpgGeneratePortraitPrompt: (characterEntryText, rpgData) =>
     ipcRenderer.invoke('litrpg:generate-portrait-prompt', { characterEntryText, rpgData }),
+  litrpgAcceptAllUpdates: (storyId) =>
+    ipcRenderer.invoke('litrpg:accept-all-updates', { storyId }),
+  litrpgRejectAllUpdates: (storyId) =>
+    ipcRenderer.invoke('litrpg:reject-all-updates', { storyId }),
+  litrpgUpdateCharacter: (storyId, characterId, updates) =>
+    ipcRenderer.invoke('litrpg:update-character', { storyId, characterId, updates }),
+  litrpgDeleteCharacter: (storyId, characterId) =>
+    ipcRenderer.invoke('litrpg:delete-character', { storyId, characterId }),
+  litrpgResetState: (storyId) =>
+    ipcRenderer.invoke('litrpg:reset-state', { storyId }),
   onLitrpgScanProgress: (callback) => {
     ipcRenderer.on('litrpg:scan-progress', (event, data) => callback(data));
   },
