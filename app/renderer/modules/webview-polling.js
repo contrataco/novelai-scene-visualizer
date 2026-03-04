@@ -7,7 +7,7 @@ import {
 } from './dom-refs.js';
 import { showToast } from './utils.js';
 import { renderSuggestions, updateBadge } from './suggestions.js';
-import { refreshLoreUI, renderComprehensionState } from './lore-creator.js';
+import { refreshLoreUI, renderComprehensionState, loadCategoryRegistry } from './lore-creator.js';
 import { renderMemoryUI } from './memory-manager.js';
 import { generateScenePromptFromEditor } from './image-gen.js';
 
@@ -139,7 +139,7 @@ async function handleStoryContextChange(storyId, storyTitle) {
       state.currentPrompt = ss.lastPrompt;
       state.currentNegativePrompt = ss.lastNegativePrompt || '';
       state.lastKnownStoryLength = ss.lastStoryLength || 0;
-      promptDisplay.textContent = state.currentPrompt;
+      promptDisplay.value = state.currentPrompt;
       if (ss.suggestions && ss.suggestions.length > 0) {
         state.currentSuggestions = ss.suggestions;
         renderSuggestions(ss.suggestions);
@@ -150,7 +150,7 @@ async function handleStoryContextChange(storyId, storyTitle) {
       state.currentPrompt = '';
       state.currentNegativePrompt = '';
       state.lastKnownStoryLength = 0;
-      promptDisplay.textContent = '(Waiting for story content...)';
+      promptDisplay.value = '';
       state.currentSuggestions = [];
       renderSuggestions([]);
       updateBadge(0);
@@ -159,7 +159,7 @@ async function handleStoryContextChange(storyId, storyTitle) {
     // Eagerly restore lore state
     if (allData.loreState) {
       state.loreState = allData.loreState;
-      refreshLoreUI();
+      loadCategoryRegistry().then(() => refreshLoreUI());
     }
 
     // Eagerly restore comprehension
@@ -183,6 +183,9 @@ async function handleStoryContextChange(storyId, storyTitle) {
     }
     // Refresh RPG UI (dynamic import to avoid circular deps)
     import('./litrpg-panel.js').then(m => m.refreshRpgUI && m.refreshRpgUI()).catch(() => {});
+
+    // Eagerly restore TTS state (per-story character voice map)
+    state.ttsState = allData.ttsState || { characterVoices: {} };
 
     console.log('[Renderer] Eagerly loaded all data for story:', storyId);
   } catch (e) {
@@ -265,12 +268,23 @@ export function init() {
   });
 
   // Story text change detection -- triggers Electron-side prompt generation
-  // when >50 chars of new text detected (replaces old textarea polling)
+  // Uses sceneSettings for auto-gen toggle and min text change threshold
+  let cachedSceneSettings = null;
+  // Load scene settings once at startup, refresh periodically
+  async function refreshSceneSettings() {
+    try { cachedSceneSettings = await window.sceneVisualizer.getSceneSettings(); } catch (e) { /* ignore */ }
+  }
+  refreshSceneSettings();
+  setInterval(refreshSceneSettings, 30000);
+
   setInterval(async () => {
     if (state.isGenerating || state.isGeneratingPrompt) return;
+    // Check auto-generate setting
+    if (cachedSceneSettings && cachedSceneSettings.autoGeneratePrompts === false) return;
+    const minChange = (cachedSceneSettings && cachedSceneSettings.minTextChange) || 50;
     try {
       const text = await readStoryTextFromDOM();
-      if (text && Math.abs(text.length - state.lastKnownStoryLength) > 50) {
+      if (text && Math.abs(text.length - state.lastKnownStoryLength) > minChange) {
         state.lastKnownStoryLength = text.length;
         await generateScenePromptFromEditor();
       }

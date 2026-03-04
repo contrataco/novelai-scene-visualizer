@@ -38,14 +38,19 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   getVeniceApiKeyStatus: () => ipcRenderer.invoke('get-venice-api-key-status'),
   getVeniceModels: () => ipcRenderer.invoke('get-venice-models'),
   getVeniceStyles: () => ipcRenderer.invoke('get-venice-styles'),
+  veniceGetBalance: () => ipcRenderer.invoke('venice:get-balance'),
+  onVeniceBalanceUpdate: (callback) => {
+    ipcRenderer.on('venice:balance-update', (_, data) => callback(data));
+  },
+  veniceGetVideoModels: () => ipcRenderer.invoke('venice:get-video-models'),
+  veniceQuoteVideo: (prompt, opts) => ipcRenderer.invoke('venice:quote-video', { prompt, opts }),
+  veniceQueueVideo: (prompt, imageData, opts) => ipcRenderer.invoke('venice:queue-video', { prompt, imageData, opts }),
+  veniceRetrieveVideo: (queueId, model) => ipcRenderer.invoke('venice:retrieve-video', { queueId, model }),
 
-  // Pollo AI
-  getPolloSettings: () => ipcRenderer.invoke('get-pollo-settings'),
-  setPolloSettings: (settings) => ipcRenderer.invoke('set-pollo-settings', settings),
-  getPolloModels: () => ipcRenderer.invoke('get-pollo-models'),
-  getPolloLoginStatus: () => ipcRenderer.invoke('get-pollo-login-status'),
-  polloLogin: () => ipcRenderer.invoke('pollo-login'),
-  polloExtractSession: () => ipcRenderer.invoke('pollo-extract-session'),
+  // Puter.js
+  getPuterSettings: () => ipcRenderer.invoke('get-puter-settings'),
+  setPuterSettings: (settings) => ipcRenderer.invoke('set-puter-settings', settings),
+  getPuterModels: () => ipcRenderer.invoke('get-puter-models'),
 
   // Token status
   getTokenStatus: () => ipcRenderer.invoke('get-token-status'),
@@ -113,8 +118,14 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
     ipcRenderer.invoke('lore:generate-enriched', { prompt, currentText, displayName }),
   loreCreateFromPrompt: (prompt, category, storyText, storyId) =>
     ipcRenderer.invoke('lore:create-from-prompt', { prompt, category, storyText, storyId }),
-  loreReformatEntry: (displayName, currentText, storyText, storyId) =>
-    ipcRenderer.invoke('lore:reformat-entry', { displayName, currentText, storyText, storyId }),
+  loreReformatEntry: (displayName, currentText, storyText, storyId, entryType) =>
+    ipcRenderer.invoke('lore:reformat-entry', { displayName, currentText, storyText, storyId, entryType }),
+  loreParseMetadata: (text) =>
+    ipcRenderer.invoke('lore:parse-metadata', { text }),
+  loreSetMetadata: (text, opts) =>
+    ipcRenderer.invoke('lore:set-metadata', { text, opts }),
+  loreGetEntryType: (text, displayName) =>
+    ipcRenderer.invoke('lore:get-entry-type', { text, displayName }),
   loreGetSettings: () => ipcRenderer.invoke('lore:get-settings'),
   loreSetSettings: (settings) => ipcRenderer.invoke('lore:set-settings', settings),
   loreGetState: (storyId) => ipcRenderer.invoke('lore:get-state', storyId),
@@ -122,6 +133,9 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   loreGetLlmProvider: () => ipcRenderer.invoke('lore:get-llm-provider'),
   loreSetLlmProvider: (config) => ipcRenderer.invoke('lore:set-llm-provider', config),
   loreCheckOllama: () => ipcRenderer.invoke('lore:check-ollama'),
+  loreGetCategoryRegistry: (storyId) => ipcRenderer.invoke('lore:get-category-registry', storyId),
+  loreAddCustomCategory: (storyId, category) => ipcRenderer.invoke('lore:add-custom-category', { storyId, category }),
+  loreRemoveCustomCategory: (storyId, categoryId) => ipcRenderer.invoke('lore:remove-custom-category', { storyId, categoryId }),
   onLoreScanProgress: (callback) => {
     ipcRenderer.on('lore:scan-progress', (event, data) => callback(data));
   },
@@ -185,6 +199,8 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
     ipcRenderer.invoke('litrpg:reject-update', { storyId, updateId }),
   litrpgBuildLorebookText: (entryText, rpgData) =>
     ipcRenderer.invoke('litrpg:build-lorebook-text', { entryText, rpgData }),
+  litrpgBuildRoleUpdate: (entryText, role) =>
+    ipcRenderer.invoke('litrpg:build-role-update', { entryText, role }),
   litrpgGeneratePortraitPrompt: (characterEntryText, rpgData) =>
     ipcRenderer.invoke('litrpg:generate-portrait-prompt', { characterEntryText, rpgData }),
   litrpgAcceptAllUpdates: (storyId) =>
@@ -197,6 +213,10 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
     ipcRenderer.invoke('litrpg:delete-character', { storyId, characterId }),
   litrpgResetState: (storyId) =>
     ipcRenderer.invoke('litrpg:reset-state', { storyId }),
+  litrpgReverseSync: (entryText, entryName, storyId) =>
+    ipcRenderer.invoke('litrpg:reverse-sync', { entryText, entryName, storyId }),
+  litrpgReverseSyncAll: (entries, storyId) =>
+    ipcRenderer.invoke('litrpg:reverse-sync-all', { entries, storyId }),
   onLitrpgScanProgress: (callback) => {
     ipcRenderer.on('litrpg:scan-progress', (event, data) => callback(data));
   },
@@ -206,6 +226,37 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   onLitrpgDetected: (callback) => {
     ipcRenderer.on('litrpg:detected', (event, data) => callback(data));
   },
+
+  // TTS
+  ttsGetSettings: () => ipcRenderer.invoke('tts:get-settings'),
+  ttsSetSettings: (settings) => ipcRenderer.invoke('tts:set-settings', settings),
+  ttsGetVoices: () => ipcRenderer.invoke('tts:get-voices'),
+  ttsGenerateSpeech: (text, voice) => ipcRenderer.invoke('tts:generate-speech', { text, voice }),
+  ttsNarrateScene: (text, storyId, protagonistName) => ipcRenderer.invoke('tts:narrate-scene', { text, storyId, protagonistName }),
+  ttsGetState: (storyId) => ipcRenderer.invoke('tts:get-state', storyId),
+  ttsSetState: (storyId, state) => ipcRenderer.invoke('tts:set-state', { storyId, state }),
+  ttsSetCharacterVoice: (storyId, characterName, voiceId) =>
+    ipcRenderer.invoke('tts:set-character-voice', { storyId, characterName, voiceId }),
+  ttsRemoveCharacterVoice: (storyId, characterName) =>
+    ipcRenderer.invoke('tts:remove-character-voice', { storyId, characterName }),
+
+  // Media Gallery
+  mediaSaveImage: (storyId, imageDataUrl, metadata) =>
+    ipcRenderer.invoke('media:save-image', { storyId, imageDataUrl, metadata }),
+  mediaSaveVideo: (storyId, videoDataUrl, metadata) =>
+    ipcRenderer.invoke('media:save-video', { storyId, videoDataUrl, metadata }),
+  mediaList: (storyId, opts) =>
+    ipcRenderer.invoke('media:list', { storyId, opts }),
+  mediaGetFull: (storyId, mediaId) =>
+    ipcRenderer.invoke('media:get-full', { storyId, mediaId }),
+  mediaGetThumbnail: (storyId, mediaId) =>
+    ipcRenderer.invoke('media:get-thumbnail', { storyId, mediaId }),
+  mediaGetVideo: (storyId, mediaId) =>
+    ipcRenderer.invoke('media:get-video', { storyId, mediaId }),
+  mediaDelete: (storyId, mediaId) =>
+    ipcRenderer.invoke('media:delete', { storyId, mediaId }),
+  mediaGetCount: (storyId) =>
+    ipcRenderer.invoke('media:get-count', { storyId }),
 
   // Portrait Manager
   portraitGenerate: (storyId, characterId, characterEntry, rpgData) =>

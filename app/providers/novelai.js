@@ -138,7 +138,29 @@ module.exports = {
     }));
   },
 
-  async generate(prompt, negativePrompt, store) {
+  // Resolve an art style ID to its prompt tags string (for LLM scene prompt injection)
+  getArtStyleTags(styleId) {
+    const style = ART_STYLES[styleId] || ART_STYLES['no-style'];
+    // Return trimmed prompt (strip leading ", ")
+    return style.prompt ? style.prompt.replace(/^,\s*/, '') : '';
+  },
+
+  // Compute the suffix tags that would be appended to a prompt (art style + quality tags).
+  // Used by renderer to show the full final prompt in the textarea.
+  getPromptSuffix(store) {
+    const settings = store.get('imageSettings') || {};
+    const model = settings.model || 'nai-diffusion-4-5-full';
+    const artStyleId = store.get('novelaiArtStyle') || 'no-style';
+    const artStyle = ART_STYLES[artStyleId] || ART_STYLES['no-style'];
+    const qualityTags = settings.qualityTags !== false ? (QUALITY_PRESETS[model] || '') : '';
+    return {
+      artStyleSuffix: artStyle.prompt || '',
+      qualitySuffix: qualityTags || '',
+      combined: (artStyle.prompt || '') + (qualityTags || ''),
+    };
+  },
+
+  async generate(prompt, negativePrompt, store, options = {}) {
     const apiToken = store.get('apiToken');
     if (!apiToken) {
       throw new Error('No API token configured. Please set your NovelAI API token.');
@@ -161,9 +183,14 @@ module.exports = {
     const negParts = [negativePrompt, styleNegative, baseNegative].filter(Boolean);
     const finalNegative = negParts.join(', ');
 
-    // Get quality tags for model
-    const qualityTags = settings.qualityTags ? (QUALITY_PRESETS[model] || '') : '';
-    const finalPrompt = prompt + artStyle.prompt + qualityTags;
+    // Get quality tags for model — skip if rawPrompt (tags already baked into prompt)
+    let finalPrompt;
+    if (options.rawPrompt) {
+      finalPrompt = prompt;
+    } else {
+      const qualityTags = settings.qualityTags ? (QUALITY_PRESETS[model] || '') : '';
+      finalPrompt = prompt + artStyle.prompt + qualityTags;
+    }
 
     console.log(`[NovelAI] Using model: ${model}, isV4: ${modelConfig.isV4}`);
 
@@ -273,6 +300,85 @@ module.exports = {
 
     console.log('[NovelAI] Image generated successfully');
     return `data:${mimeType};base64,${base64}`;
+  },
+
+  /**
+   * Generate text via NovelAI's OpenAI-compatible chat API (GLM-4-6).
+   * Endpoint streams SSE chunks; we accumulate delta.content text.
+   */
+  async generateText(messages, options, store) {
+    const apiToken = store.get('apiToken');
+    if (!apiToken) throw new Error('No API token available');
+
+    const model = options.model || 'glm-4-6';
+    const maxTokens = options.max_tokens || 300;
+    const temperature = options.temperature || 0.6;
+
+    const response = await fetch('https://text.novelai.net/oa/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        max_tokens: maxTokens,
+        temperature,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`NovelAI text API error ${response.status}: ${text}`);
+    }
+
+    // Read SSE stream and accumulate text from delta.content
+    const rawText = await response.text();
+    let fullText = '';
+    const lines = rawText.split('\n');
+    for (const line of lines) {
+      if (!line.startsWith('data: ') || line.trim() === 'data: [DONE]') continue;
+      try {
+        const chunk = JSON.parse(line.slice(6));
+        if (chunk.choices?.[0]?.delta?.content) {
+          fullText += chunk.choices[0].delta.content;
+        } else if (chunk.choices?.[0]?.text && chunk.choices[0].text.length > 0) {
+          fullText += chunk.choices[0].text;
+        }
+      } catch (e) {
+        // Skip unparseable chunks
+      }
+    }
+
+    return { output: fullText };
+  },
+
+  // ---------------------------------------------------------------------------
+  // Text-to-Speech
+  // ---------------------------------------------------------------------------
+
+  getVoiceSeeds() {
+    return ['Aini', 'Orea', 'Claea', 'Liedka', 'Aulon', 'Oyn', 'Naia', 'Aurae', 'Zaia', 'Zyre', 'Ligeia', 'Anthe'];
+  },
+
+  async generateSpeech(text, seed, store) {
+    const token = store.get('apiToken');
+    if (!token) throw new Error('No API token configured.');
+
+    const params = new URLSearchParams({ text, seed, voice: '-1', opus: 'false', version: 'v1' });
+    const res = await fetch(`https://api.novelai.net/ai/generate-voice?${params}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`NovelAI TTS error ${res.status}: ${errorText.substring(0, 300)}`);
+    }
+
+    const buf = Buffer.from(await res.arrayBuffer());
+    return { audioData: `data:audio/webm;base64,${buf.toString('base64')}`, format: 'webm' };
   },
 
   getModelFallbackOrder(currentModel) {

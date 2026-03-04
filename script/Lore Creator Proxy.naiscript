@@ -1,0 +1,479 @@
+/*---
+compatibilityVersion: naiscript-1.0
+id: f7c2a1d8-9e3b-4f5a-b6c1-d8e9f0a1b2c3
+name: Lore Creator Proxy
+createdAt: 1772092800000
+updatedAt: 1772092800000
+version: 3.8.4
+author: Contrataco
+description: Unified proxy for Scene Visualizer Electron (lore + memory)
+memoryLimit: 16
+---*/
+
+// ============================================================================
+// UNIFIED PROXY v3.8.4
+//
+// Combines Lore Creator + Memory Manager proxy into a single script so both
+// command channels share one sidebarPanel and are always in the DOM.
+// ============================================================================
+
+const LOG_PREFIX = '[UnifiedProxy]';
+
+// Response state per channel
+let loreResponsePayload = '';
+let memoryResponsePayload = '';
+let panelUpdateFn: (() => Promise<void>) | null = null;
+
+// Deduplication guards (input+change events both fire onChange)
+let lastLoreReqId = '';
+let lastMemoryReqId = '';
+
+// ============================================================================
+// LOREBOOK OPERATIONS
+// ============================================================================
+
+async function updateLorebookEntry(rawEntry: any, updates: Record<string, any>): Promise<boolean> {
+  const entryId = rawEntry.id;
+
+  // Strategy 1: updateEntry API
+  try {
+    await (api.v1.lorebook as any).updateEntry(entryId, updates);
+    api.v1.log(`${LOG_PREFIX} Updated via updateEntry: ${rawEntry.displayName}`);
+    return true;
+  } catch (_) {}
+
+  // Strategy 2: Direct mutation + save
+  try {
+    for (const [key, value] of Object.entries(updates)) {
+      rawEntry[key] = value;
+    }
+    if (typeof rawEntry.save === 'function') {
+      await rawEntry.save();
+      api.v1.log(`${LOG_PREFIX} Updated via mutation: ${rawEntry.displayName}`);
+      return true;
+    }
+  } catch (_) {}
+
+  // Strategy 3: Delete + recreate
+  try {
+    await (api.v1.lorebook as any).removeEntry(entryId);
+    const recreated: any = {
+      displayName: updates.displayName ?? rawEntry.displayName,
+      text: updates.text ?? rawEntry.text,
+      keys: updates.keys ?? rawEntry.keys ?? [],
+      enabled: rawEntry.enabled !== false,
+    };
+    const finalCategory = updates.category ?? rawEntry.category;
+    if (finalCategory) recreated.category = finalCategory;
+    await (api.v1.lorebook as any).createEntry(recreated);
+    api.v1.log(`${LOG_PREFIX} Updated via delete+recreate: ${recreated.displayName}`);
+    return true;
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} All update strategies failed for ${rawEntry.displayName}:`, e);
+    return false;
+  }
+}
+
+async function proxyGetEntries(): Promise<any[]> {
+  try {
+    const entries = await api.v1.lorebook.entries();
+    return entries.map((entry: any) => ({
+      id: entry.id,
+      displayName: entry.displayName || '',
+      keys: entry.keys || [],
+      text: entry.text || '',
+      category: entry.category || null,
+      enabled: entry.enabled !== false,
+    }));
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Error reading entries:`, e);
+    return [];
+  }
+}
+
+async function proxyCreateEntry(data: any): Promise<string | null> {
+  try {
+    const entry: any = {
+      displayName: data.displayName,
+      text: data.text,
+      keys: data.keys,
+      enabled: data.enabled !== false,
+    };
+    if (data.category) entry.category = data.category;
+    const result = await (api.v1.lorebook as any).createEntry(entry);
+    const entryId = (result && result.id) ? result.id : result;
+    api.v1.log(`${LOG_PREFIX} Created: ${data.displayName} (${entryId})`);
+    return entryId;
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Error creating ${data.displayName}:`, e);
+    return null;
+  }
+}
+
+async function proxyUpdateEntry(id: string, updates: any): Promise<boolean> {
+  try {
+    const entries = await api.v1.lorebook.entries();
+    const rawEntry = entries.find((e: any) => e.id === id);
+    if (!rawEntry) {
+      api.v1.error(`${LOG_PREFIX} Entry not found: ${id}`);
+      return false;
+    }
+    return await updateLorebookEntry(rawEntry, updates);
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Error updating ${id}:`, e);
+    return false;
+  }
+}
+
+async function proxyDeleteEntry(id: string): Promise<boolean> {
+  try {
+    await (api.v1.lorebook as any).removeEntry(id);
+    api.v1.log(`${LOG_PREFIX} Deleted: ${id}`);
+    return true;
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Error deleting ${id}:`, e);
+    return false;
+  }
+}
+
+async function proxyCreateCategory(data: any): Promise<string | null> {
+  try {
+    const category = await (api.v1.lorebook as any).createCategory({
+      name: data.name,
+      enabled: data.enabled !== false,
+    });
+    const categoryId = (category && category.id) ? category.id : category;
+    api.v1.log(`${LOG_PREFIX} Created category: ${data.name} (${categoryId})`);
+    return categoryId;
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Error creating category ${data.name}:`, e);
+    return null;
+  }
+}
+
+async function proxyGetCategories(): Promise<any[]> {
+  try {
+    // Try the categories API first
+    if (typeof (api.v1.lorebook as any).categories === 'function') {
+      const cats = await (api.v1.lorebook as any).categories();
+      if (Array.isArray(cats)) {
+        return cats.map((c: any) => ({
+          id: c.id,
+          name: c.name || c.displayName || '',
+          enabled: c.enabled !== false,
+        }));
+      }
+    }
+  } catch (_) {
+    // Fall through to extraction from entries
+  }
+
+  // Fallback: extract unique category IDs from entries
+  try {
+    const entries = await api.v1.lorebook.entries();
+    const catMap = new Map<string, string>();
+    for (const entry of entries) {
+      const catId = (entry as any).category;
+      if (catId && !catMap.has(catId)) {
+        catMap.set(catId, '');
+      }
+    }
+    return Array.from(catMap.entries()).map(([id, name]) => ({ id, name, enabled: true }));
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Error getting categories:`, e);
+    return [];
+  }
+}
+
+async function proxyGetStoryText(): Promise<string> {
+  try {
+    const scanResults = await api.v1.document.scan();
+    let text = '';
+    for (const { section } of scanResults) {
+      if (section.text) text += section.text + '\n';
+    }
+    return text;
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Error reading story:`, e);
+    return '';
+  }
+}
+
+// ============================================================================
+// MEMORY OPERATIONS
+// ============================================================================
+
+async function proxyGetMemory(): Promise<string> {
+  try {
+    const memory = await api.v1.memory.get();
+    return memory || '';
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Error reading memory:`, e);
+    return '';
+  }
+}
+
+async function proxySetMemory(text: string): Promise<boolean> {
+  try {
+    await api.v1.memory.set(text);
+    api.v1.log(`${LOG_PREFIX} Memory updated (${text.length} chars)`);
+    return true;
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Error setting memory:`, e);
+    return false;
+  }
+}
+
+async function proxyCountTokens(text: string): Promise<number> {
+  try {
+    const tokens = await api.v1.tokenizer.encode(text, 'glm-4-6');
+    return tokens.length;
+  } catch (e) {
+    return Math.ceil(text.length / 4);
+  }
+}
+
+// ============================================================================
+// REQUEST HANDLERS
+// ============================================================================
+
+async function handleLoreRequest(req: { id: string; method: string; args: any[] }): Promise<any> {
+  switch (req.method) {
+    case 'getEntries': return proxyGetEntries();
+    case 'createEntry': return proxyCreateEntry(req.args[0]);
+    case 'updateEntry': return proxyUpdateEntry(req.args[0], req.args[1]);
+    case 'deleteEntry': return proxyDeleteEntry(req.args[0]);
+    case 'createCategory': return proxyCreateCategory(req.args[0]);
+    case 'getCategories': return proxyGetCategories();
+    case 'getStoryText': return proxyGetStoryText();
+    case 'ping': return { ok: true, ts: Date.now() };
+    default:
+      return { __error: 'Unknown lore method: ' + req.method };
+  }
+}
+
+async function handleMemoryRequest(req: { id: string; method: string; args: any[] }): Promise<any> {
+  switch (req.method) {
+    case 'getMemory': return proxyGetMemory();
+    case 'setMemory': return proxySetMemory(req.args[0]);
+    case 'getStoryText': return proxyGetStoryText();
+    case 'countTokens': return proxyCountTokens(req.args[0]);
+    case 'ping': return { ok: true, ts: Date.now() };
+    default:
+      return { __error: 'Unknown memory method: ' + req.method };
+  }
+}
+
+// ============================================================================
+// DOM-BASED RESPONSE CHANNEL
+// Writes responses to hidden DOM elements (readable via executeJavaScript)
+// so the renderer gets responses even if api.v1.ui.update() fails.
+// ============================================================================
+
+const DOM_IDS = {
+  loreCmd: '__lore_proxy_dom_cmd__',
+  loreRes: '__lore_proxy_dom_res__',
+  memoryCmd: '__memory_proxy_dom_cmd__',
+  memoryRes: '__memory_proxy_dom_res__',
+};
+
+function ensureDomElement(id: string): HTMLElement | null {
+  try {
+    let el = document.getElementById(id);
+    if (!el) {
+      el = document.createElement('div');
+      el.id = id;
+      el.style.display = 'none';
+      document.body.appendChild(el);
+    }
+    return el;
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeDomResponse(id: string, payload: string): void {
+  try {
+    const el = ensureDomElement(id);
+    if (el) el.textContent = payload;
+  } catch (_) {}
+}
+
+// DOM command polling removed — setInterval is undefined in the Script API sandbox.
+// Commands arrive via onChange callbacks on the textInput widgets (primary channel).
+// DOM response elements are written by writeDomResponse and read by the renderer's
+// executeJavaScript polling as a fallback when api.v1.ui.update() fails.
+
+// ============================================================================
+// UI PANEL — single sidebarPanel with both command channels
+// ============================================================================
+
+async function processLoreCommand(text: string): Promise<void> {
+  if (!text || !text.startsWith('{')) return;
+  try {
+    const req = JSON.parse(text);
+    if (!req.id || !req.method) return;
+    if (req.id === lastLoreReqId) return;
+    lastLoreReqId = req.id;
+    api.v1.log(`${LOG_PREFIX} [Lore] << ${req.method} (${req.id})`);
+    const result = await handleLoreRequest(req);
+    loreResponsePayload = JSON.stringify({ id: req.id, data: result });
+    api.v1.log(`${LOG_PREFIX} [Lore] >> ${req.method} done`);
+    // Write response to DOM element (always works, even if panel update fails)
+    writeDomResponse(DOM_IDS.loreRes, loreResponsePayload);
+    // Update panel to render response text (setTimeout unavailable in sandbox)
+    if (panelUpdateFn) {
+      try { await panelUpdateFn(); } catch (_) {}
+    }
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} [Lore] Command error:`, e);
+  }
+}
+
+async function processMemoryCommand(text: string): Promise<void> {
+  if (!text || !text.startsWith('{')) return;
+  try {
+    const req = JSON.parse(text);
+    if (!req.id || !req.method) return;
+    if (req.id === lastMemoryReqId) return;
+    lastMemoryReqId = req.id;
+    api.v1.log(`${LOG_PREFIX} [Memory] << ${req.method} (${req.id})`);
+    const result = await handleMemoryRequest(req);
+    memoryResponsePayload = JSON.stringify({ id: req.id, data: result });
+    api.v1.log(`${LOG_PREFIX} [Memory] >> ${req.method} done`);
+    // Write response to DOM element (always works, even if panel update fails)
+    writeDomResponse(DOM_IDS.memoryRes, memoryResponsePayload);
+    // Update panel to render response text (setTimeout unavailable in sandbox)
+    if (panelUpdateFn) {
+      try { await panelUpdateFn(); } catch (_) {}
+    }
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} [Memory] Command error:`, e);
+  }
+}
+
+async function buildPanel(): Promise<any> {
+  return api.v1.ui.part.column({
+    content: [
+      api.v1.ui.part.text({
+        text: 'Unified Proxy v3.8.4 — Electron Bridge',
+      }),
+      // Lore command channel
+      api.v1.ui.part.textInput({
+        initialValue: '',
+        placeholder: '__LORE_PROXY_CMD__',
+        onChange: (text: string) => { processLoreCommand(text); },
+      }),
+      api.v1.ui.part.text({
+        text: '__LORE_PROXY_RES__' + loreResponsePayload + '__LORE_PROXY_END__',
+      }),
+      // Memory command channel
+      api.v1.ui.part.textInput({
+        initialValue: '',
+        placeholder: '__MEMORY_PROXY_CMD__',
+        onChange: (text: string) => { processMemoryCommand(text); },
+      }),
+      api.v1.ui.part.text({
+        text: '__MEMORY_PROXY_RES__' + memoryResponsePayload + '__MEMORY_PROXY_END__',
+      }),
+    ],
+  });
+}
+
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
+(async () => {
+  api.v1.log(`${LOG_PREFIX} v3.8.4 initializing...`);
+
+  let hasPermissions = false;
+  try {
+    hasPermissions = await api.v1.permissions.request(['storyEdit', 'lorebookEdit']);
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Permission request error:`, e);
+    try {
+      hasPermissions = await api.v1.permissions.request(['storyEdit']);
+    } catch (e2) {
+      api.v1.error(`${LOG_PREFIX} Fallback permission also failed:`, e2);
+    }
+  }
+
+  if (!hasPermissions) {
+    api.v1.error(`${LOG_PREFIX} Permissions denied`);
+    api.v1.ui.toast('Unified Proxy: permissions denied', { autoClose: 5000, type: 'error' });
+    return;
+  }
+
+  // Register as sidebarPanel (renders persistently), fallback to scriptPanel
+  const panelTypes = ['sidebarPanel', 'scriptPanel'];
+  let registeredType = '';
+
+  const updatePanel = async () => {
+    if (!registeredType) return;
+    try {
+      const panel = await buildPanel();
+      await api.v1.ui.update([
+        (api.v1.ui.extension as any)[registeredType]({
+          id: 'unifiedProxyPanel',
+          name: 'Electron Bridge',
+          content: [panel],
+        }),
+      ]);
+    } catch (e) {
+      api.v1.error(`${LOG_PREFIX} Panel update error:`, e);
+    }
+  };
+  panelUpdateFn = updatePanel;
+
+  for (const panelType of panelTypes) {
+    try {
+      const initialPanel = await buildPanel();
+      await api.v1.ui.register([
+        (api.v1.ui.extension as any)[panelType]({
+          id: 'unifiedProxyPanel',
+          name: 'Electron Bridge',
+          content: [initialPanel],
+        }),
+      ]);
+      registeredType = panelType;
+      api.v1.log(`${LOG_PREFIX} Registered as ${panelType}`);
+      break;
+    } catch (e) {
+      api.v1.log(`${LOG_PREFIX} ${panelType} registration failed, trying next...`);
+    }
+  }
+
+  // Expose on globalThis for in-sandbox callers
+  (globalThis as any).__loreCreator = {
+    isReady: () => true,
+    getEntries: proxyGetEntries,
+    createEntry: proxyCreateEntry,
+    updateEntry: proxyUpdateEntry,
+    deleteEntry: proxyDeleteEntry,
+    createCategory: proxyCreateCategory,
+    getCategories: proxyGetCategories,
+    getStoryText: proxyGetStoryText,
+  };
+
+  (globalThis as any).__memoryProxy = {
+    isReady: () => true,
+    getMemory: proxyGetMemory,
+    setMemory: proxySetMemory,
+    getStoryText: proxyGetStoryText,
+    countTokens: proxyCountTokens,
+  };
+
+  // Create DOM response elements (writeDomResponse writes here as fallback
+  // for when api.v1.ui.update fails — renderer polls these via executeJavaScript)
+  try {
+    ensureDomElement(DOM_IDS.loreRes);
+    ensureDomElement(DOM_IDS.memoryRes);
+    api.v1.log(`${LOG_PREFIX} DOM response elements created`);
+  } catch (e) {
+    api.v1.log(`${LOG_PREFIX} DOM elements unavailable: ${e}`);
+  }
+
+  api.v1.ui.toast('Unified Proxy loaded', { autoClose: 3000, type: 'success' });
+  api.v1.log(`${LOG_PREFIX} Ready (lore + memory + DOM channels active)`);
+})();

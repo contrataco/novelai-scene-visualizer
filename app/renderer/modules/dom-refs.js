@@ -61,14 +61,18 @@ export const veniceCfgScaleInput = document.getElementById('veniceCfgScale');
 export const veniceStylePresetSelect = document.getElementById('veniceStylePreset');
 export const veniceSafeModeCheckbox = document.getElementById('veniceSafeMode');
 export const veniceHideWatermarkCheckbox = document.getElementById('veniceHideWatermark');
+export const veniceVideoModelSelect = document.getElementById('veniceVideoModel');
+export const veniceVideoDurationSelect = document.getElementById('veniceVideoDuration');
+export const veniceVideoResolutionSelect = document.getElementById('veniceVideoResolution');
+export const veniceBalance = document.getElementById('veniceBalance');
+export const veniceBalanceText = document.getElementById('veniceBalanceText');
+export const veniceSettingsBalance = document.getElementById('veniceSettingsBalance');
+export const veniceSettingsBalanceText = document.getElementById('veniceSettingsBalanceText');
 
-// Settings elements -- Pollo AI
-export const polloLoginDot = document.getElementById('polloLoginDot');
-export const polloLoginText = document.getElementById('polloLoginText');
-export const polloLoginBtn = document.getElementById('polloLoginBtn');
-export const polloExtractBtn = document.getElementById('polloExtractBtn');
-export const polloModelSelect = document.getElementById('polloModel');
-export const polloAspectRatioSelect = document.getElementById('polloAspectRatio');
+// Settings elements -- Puter.js
+export const puterModelSelect = document.getElementById('puterModel');
+export const puterQualitySelect = document.getElementById('puterQuality');
+export const puterQualityGroup = document.getElementById('puterQualityGroup');
 
 // Auto-generate toggle
 export const autoGenerateToggle = document.getElementById('autoGenerateToggle');
@@ -260,6 +264,7 @@ export const rpgSystemIndicator = document.getElementById('rpgSystemIndicator');
 export const rpgSystemType = document.getElementById('rpgSystemType');
 export const rpgScanBtn = document.getElementById('rpgScanBtn');
 export const rpgSyncLorebookBtn = document.getElementById('rpgSyncLorebookBtn');
+export const rpgReverseSyncBtn = document.getElementById('rpgReverseSyncBtn');
 export const rpgScanStatus = document.getElementById('rpgScanStatus');
 export const rpgScanPhase = document.getElementById('rpgScanPhase');
 export const rpgPartyList = document.getElementById('rpgPartyList');
@@ -285,14 +290,43 @@ export const rpgStatOverlay = document.getElementById('rpgStatOverlay');
 export const rpgStatOverlayContent = document.getElementById('rpgStatOverlayContent');
 export const rpgStatOverlayClose = document.getElementById('rpgStatOverlayClose');
 
-// Lore categories
-export const LORE_CATEGORIES = ['character', 'location', 'item', 'faction', 'concept'];
+// TTS elements
+export const ttsNarrateBtn = document.getElementById('ttsNarrateBtn');
+export const ttsStopBtn = document.getElementById('ttsStopBtn');
+export const ttsProgress = document.getElementById('ttsProgress');
+export const ttsProviderSelect = document.getElementById('ttsProvider');
+export const ttsNarratorVoiceSelect = document.getElementById('ttsNarratorVoice');
+export const ttsDialogueVoiceSelect = document.getElementById('ttsDialogueVoice');
+export const ttsSpeedSlider = document.getElementById('ttsSpeed');
+export const ttsSpeedValue = document.getElementById('ttsSpeedValue');
+export const ttsFirstPersonCheckbox = document.getElementById('ttsFirstPerson');
+export const ttsVoiceMap = document.getElementById('ttsVoiceMap');
+export const ttsVoiceList = document.getElementById('ttsVoiceList');
+export const ttsVoiceCount = document.getElementById('ttsVoiceCount');
+export const ttsAutoAssignBtn = document.getElementById('ttsAutoAssignBtn');
+export const ttsSettingsVoiceList = document.getElementById('ttsSettingsVoiceList');
+export const ttsSettingsVoiceCount = document.getElementById('ttsSettingsVoiceCount');
+export const ttsAddCharName = document.getElementById('ttsAddCharName');
+export const ttsAddCharVoice = document.getElementById('ttsAddCharVoice');
+export const ttsAddCharBtn = document.getElementById('ttsAddCharBtn');
 
-// Category naming map: entry type -> lorebook category name
-export const CATEGORY_NAMES = {
-  character: 'Characters',
-  location: 'Locations',
-  item: 'Items',
-  faction: 'Factions',
-  concept: 'Concepts',
-};
+// Media Gallery elements
+export const mediaTab = document.getElementById('mediaTab');
+export const mediaContent = document.getElementById('mediaContent');
+export const mediaGrid = document.getElementById('mediaGrid');
+export const mediaCount = document.getElementById('mediaCount');
+export const mediaFilterSelect = document.getElementById('mediaFilter');
+export const mediaLightbox = document.getElementById('mediaLightbox');
+export const mediaLightboxContent = document.getElementById('mediaLightboxContent');
+export const mediaLightboxClose = document.getElementById('mediaLightboxClose');
+
+// Lore category management elements
+export const loreCategoryToggles = document.getElementById('loreCategoryToggles');
+export const loreAddCategoryBtn = document.getElementById('loreAddCategoryBtn');
+export const loreDetectCategoriesBtn = document.getElementById('loreDetectCategoriesBtn');
+export const loreAddCategoryForm = document.getElementById('loreAddCategoryForm');
+export const loreNewCategoryName = document.getElementById('loreNewCategoryName');
+export const loreNewCategoryColor = document.getElementById('loreNewCategoryColor');
+export const loreAddCategoryConfirm = document.getElementById('loreAddCategoryConfirm');
+export const loreAddCategoryCancel = document.getElementById('loreAddCategoryCancel');
+export const dynamicCategoriesStyle = document.getElementById('dynamic-categories');

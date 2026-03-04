@@ -1,11 +1,12 @@
 // litrpg-panel.js — LitRPG RPG tab: stat sheets, quest log, party view, NPC registry, inventory, currency, status effects
 
 import { state, bus } from './state.js';
+import { saveLoreState, refreshLoreUI } from './lore-creator.js';
 import {
   rpgTab, rpgContent,
   rpgDetectionBanner, rpgEnableBtn, rpgDismissBtn,
   rpgSystemIndicator, rpgSystemType,
-  rpgScanBtn, rpgSyncLorebookBtn,
+  rpgScanBtn, rpgSyncLorebookBtn, rpgReverseSyncBtn,
   rpgScanStatus, rpgScanPhase,
   rpgPartyList, rpgPartyCount,
   rpgQuestListActive, rpgQuestListDone, rpgQuestCount,
@@ -19,6 +20,29 @@ import {
   webview,
 } from './dom-refs.js';
 import { escapeHtml, showToast } from './utils.js';
+
+// =========================================================================
+// ROLE CONSTANTS
+// =========================================================================
+
+const ROLE_CYCLE = ['party-member', 'companion', 'summon', 'pet', 'mount', 'npc'];
+const PARTY_SIDE_ROLES = new Set(['party-member', 'companion', 'summon', 'pet', 'mount']);
+const ROLE_LABELS = {
+  'party-member': 'Party Member',
+  'companion': 'Companion',
+  'summon': 'Summon',
+  'pet': 'Pet',
+  'mount': 'Mount',
+  'npc': 'NPC',
+};
+const ROLE_COLORS = {
+  'party-member': '#4fc3f7',
+  'companion': '#81c784',
+  'summon': '#ce93d8',
+  'pet': '#ffb74d',
+  'mount': '#a1887f',
+  'npc': '#90a4ae',
+};
 
 // =========================================================================
 // STATE HELPERS
@@ -67,6 +91,7 @@ export function refreshRpgUI() {
   // Scan/sync buttons visibility
   if (rpgScanBtn) rpgScanBtn.disabled = !rpg.enabled || state.litrpgScanning;
   if (rpgSyncLorebookBtn) rpgSyncLorebookBtn.disabled = !rpg.enabled;
+  if (rpgReverseSyncBtn) rpgReverseSyncBtn.disabled = !rpg.enabled;
 
   // Settings persistence (Phase 5A)
   if (rpgAutoScan) rpgAutoScan.checked = rpg.autoScan !== false;
@@ -112,7 +137,7 @@ function renderParty(rpg) {
       <div class="rpg-portrait">
         ${char.portraitPath
           ? `<img src="data:image/png;base64,${char._thumbnailData || ''}" alt="${escapeHtml(char.name)}">`
-          : `<span class="rpg-portrait-placeholder">&#9876;</span>`}
+          : `<span class="rpg-portrait-placeholder"><svg width="28" height="28" viewBox="0 0 40 40" fill="#666" opacity="0.3"><ellipse cx="20" cy="14" rx="9" ry="10"/><ellipse cx="20" cy="42" rx="16" ry="14"/></svg></span>`}
       </div>
       <div class="rpg-char-info">
         <div class="rpg-char-name">${escapeHtml(char.name)}</div>
@@ -153,10 +178,56 @@ function openStatOverlay(charId, rpg) {
   if (genBtn) genBtn.addEventListener('click', () => generatePortrait(charId));
   if (uploadBtn) uploadBtn.addEventListener('click', () => uploadPortrait(charId));
   if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCharacter(charId));
+
+  // Wire role cycle chip
+  const roleChip = rpgStatOverlayContent.querySelector('.rpg-role-chip');
+  if (roleChip) roleChip.addEventListener('click', () => cycleRole(charId));
 }
 
 function closeStatOverlay() {
+  if (editDirty && !confirm('Discard unsaved changes?')) return;
+  editDirty = false;
   if (rpgStatOverlay) rpgStatOverlay.style.display = 'none';
+}
+
+async function cycleRole(charId) {
+  const rpg = getRpgState();
+  const char = rpg.characters?.[charId];
+  if (!char) return;
+
+  // Determine current role and cycle to next
+  const currentRole = char.partyRole || (char.isPartyMember ? 'party-member' : (char.isNPC ? 'npc' : null));
+  const currentIdx = currentRole ? ROLE_CYCLE.indexOf(currentRole) : -1;
+  const nextRole = ROLE_CYCLE[(currentIdx + 1) % ROLE_CYCLE.length];
+
+  // Update character flags
+  const isPartySide = PARTY_SIDE_ROLES.has(nextRole);
+  char.isPartyMember = isPartySide;
+  char.isNPC = !isPartySide;
+  char.partyRole = nextRole;
+
+  // Update party members list
+  rpg.party.members = Object.entries(rpg.characters)
+    .filter(([, c]) => c.isPartyMember)
+    .map(([id]) => id);
+  rpg.party.lastUpdated = Date.now();
+
+  // Save state
+  state.litrpgState = rpg;
+  saveLitrpgState();
+
+  // Write @role metadata to lorebook entry
+  if (char.loreEntryName) {
+    try {
+      await applyRoleUpdatesToLorebook([{ charName: char.name, loreEntryName: char.loreEntryName, role: nextRole }]);
+    } catch (err) {
+      console.error(`[LitRPG] Failed to write @role for ${char.name}:`, err);
+    }
+  }
+
+  // Re-render stat sheet and refresh UI
+  openStatOverlay(charId, getRpgState());
+  refreshRpgUI();
 }
 
 function buildStatSheetHTML(char) {
@@ -192,12 +263,18 @@ function buildStatSheetHTML(char) {
     ? `<div style="font-size:11px;color:#d4a574;margin-top:4px;">Cultivation: ${escapeHtml(char.cultivationRealm)}${char.cultivationStage ? ` (${escapeHtml(char.cultivationStage)})` : ''}</div>`
     : '';
 
+  // Role chip (party-member, companion, summon, pet, mount, npc)
+  const currentRole = char.partyRole || (char.isPartyMember ? 'party-member' : (char.isNPC ? 'npc' : null));
+  const roleLabel = currentRole ? (ROLE_LABELS[currentRole] || currentRole) : 'Unclassified';
+  const roleColor = currentRole ? (ROLE_COLORS[currentRole] || '#666') : '#666';
+  const roleChipHTML = `<button class="rpg-role-chip" data-role="${escapeHtml(currentRole || '')}" title="Click to cycle role" style="font-size:9px;padding:1px 8px;margin-top:3px;background:transparent;color:${roleColor};border:1px solid ${roleColor};border-radius:10px;cursor:pointer;display:inline-block;">${escapeHtml(roleLabel)}</button>`;
+
   return `
     <div class="rpg-stat-header">
       <div class="rpg-portrait-large">
         ${char.portraitPath
           ? `<img src="data:image/png;base64,${char._portraitData || ''}" alt="${escapeHtml(char.name)}">`
-          : `<span style="font-size:24px;color:#666;">&#9876;</span>`}
+          : `<svg width="40" height="40" viewBox="0 0 40 40" fill="#666" opacity="0.3"><ellipse cx="20" cy="14" rx="9" ry="10"/><ellipse cx="20" cy="42" rx="16" ry="14"/></svg>`}
         <div class="rpg-portrait-actions">
           <button class="rpg-portrait-generate" title="Generate Portrait">Gen</button>
           <button class="rpg-portrait-upload" title="Upload Portrait">Up</button>
@@ -206,6 +283,7 @@ function buildStatSheetHTML(char) {
       <div style="flex:1;">
         <h3>${escapeHtml(char.name)}</h3>
         <div style="font-size:11px;color:var(--cat-rpg);">${char.level ? `Level ${char.level} ` : ''}${escapeHtml(char.class || '')}${char.subclass ? ` / ${escapeHtml(char.subclass)}` : ''}${char.race ? ` (${escapeHtml(char.race)})` : ''}</div>
+        ${roleChipHTML}
         ${cultivationHTML}
         ${xpHTML}
       </div>
@@ -227,13 +305,76 @@ function buildStatSheetHTML(char) {
 // MANUAL STAT EDITING (Phase 5E)
 // =========================================================================
 
+let editDirty = false;
+
+function markEditDirty() { editDirty = true; }
+
+const INPUT_STYLE = 'background:var(--bg-input);color:#fff;border:1px solid #555;border-radius:3px;padding:2px 6px;font-size:11px;';
+const SLOT_OPTIONS = ['weapon','off-hand','shield','helmet','armor','legs','boots','gloves','ring','amulet','cloak','belt','bracers','earring','trinket','accessory','other'];
+const RARITY_OPTIONS = ['common','uncommon','rare','epic','legendary','unknown'];
+const STATUS_TYPE_OPTIONS = ['buff','debuff','condition'];
+
+function buildSelectHTML(name, options, selected) {
+  return `<select data-field="${name}" style="${INPUT_STYLE}">${options.map(o => `<option value="${o}"${o === selected ? ' selected' : ''}>${o}</option>`).join('')}</select>`;
+}
+
 function enterEditMode(charId) {
   const rpg = getRpgState();
   const char = rpg.characters?.[charId];
   if (!char || !rpgStatOverlayContent) return;
 
   const statsInputs = Object.entries(char.stats || {}).map(([name, s]) =>
-    `<div class="rpg-stat"><span class="stat-name">${escapeHtml(name)}</span><input type="number" class="rpg-edit-stat" data-stat="${escapeHtml(name)}" value="${s.value}" style="width:50px;background:var(--bg-input);color:#fff;border:1px solid #555;border-radius:3px;padding:1px 4px;font-size:11px;"></div>`
+    `<div class="rpg-stat"><span class="stat-name">${escapeHtml(name)}</span><input type="number" class="rpg-edit-stat" data-stat="${escapeHtml(name)}" value="${s.value}" style="width:50px;${INPUT_STYLE}"></div>`
+  ).join('');
+
+  // Abilities section
+  const abilitiesRows = (char.abilities || []).map((a, idx) =>
+    `<div class="rpg-edit-row" data-section="abilities" data-idx="${idx}" style="display:flex;gap:4px;align-items:center;margin-bottom:3px;">
+      <input type="text" data-field="name" value="${escapeHtml(a.name)}" placeholder="Name" style="flex:2;${INPUT_STYLE}">
+      <input type="number" data-field="level" value="${a.level || ''}" placeholder="Lv" style="width:40px;${INPUT_STYLE}">
+      <input type="text" data-field="description" value="${escapeHtml(a.description || '')}" placeholder="Description" style="flex:3;${INPUT_STYLE}">
+      <button class="rpg-edit-remove" style="font-size:10px;color:#ff6b6b;background:none;border:none;cursor:pointer;" title="Remove">✕</button>
+    </div>`
+  ).join('');
+
+  // Equipment section
+  const equipmentRows = (char.equipment || []).map((e, idx) =>
+    `<div class="rpg-edit-row" data-section="equipment" data-idx="${idx}" style="display:flex;gap:4px;align-items:center;margin-bottom:3px;">
+      <input type="text" data-field="name" value="${escapeHtml(e.name)}" placeholder="Name" style="flex:2;${INPUT_STYLE}">
+      ${buildSelectHTML('slot', SLOT_OPTIONS, e.slot || 'other')}
+      ${buildSelectHTML('rarity', RARITY_OPTIONS, e.rarity || 'unknown')}
+      <input type="text" data-field="description" value="${escapeHtml(e.description || '')}" placeholder="Description" style="flex:2;${INPUT_STYLE}">
+      <button class="rpg-edit-remove" style="font-size:10px;color:#ff6b6b;background:none;border:none;cursor:pointer;" title="Remove">✕</button>
+    </div>`
+  ).join('');
+
+  // Inventory section
+  const inventoryRows = (char.inventory || []).map((i, idx) =>
+    `<div class="rpg-edit-row" data-section="inventory" data-idx="${idx}" style="display:flex;gap:4px;align-items:center;margin-bottom:3px;">
+      <input type="text" data-field="name" value="${escapeHtml(i.name)}" placeholder="Name" style="flex:2;${INPUT_STYLE}">
+      <input type="number" data-field="quantity" value="${i.quantity || 1}" placeholder="Qty" style="width:45px;${INPUT_STYLE}">
+      ${buildSelectHTML('type', ['consumable','material','quest_item','other'], i.type || 'other')}
+      <button class="rpg-edit-remove" style="font-size:10px;color:#ff6b6b;background:none;border:none;cursor:pointer;" title="Remove">✕</button>
+    </div>`
+  ).join('');
+
+  // Currency section
+  const currencyRows = Object.entries(char.currency || {}).map(([unit, amount], idx) =>
+    `<div class="rpg-edit-row" data-section="currency" data-idx="${idx}" style="display:flex;gap:4px;align-items:center;margin-bottom:3px;">
+      <input type="text" data-field="unit" value="${escapeHtml(unit)}" placeholder="Currency" style="flex:1;${INPUT_STYLE}">
+      <input type="number" data-field="amount" value="${amount}" placeholder="Amount" style="width:80px;${INPUT_STYLE}">
+      <button class="rpg-edit-remove" style="font-size:10px;color:#ff6b6b;background:none;border:none;cursor:pointer;" title="Remove">✕</button>
+    </div>`
+  ).join('');
+
+  // Status effects section
+  const statusRows = (char.statusEffects || []).map((s, idx) =>
+    `<div class="rpg-edit-row" data-section="statusEffects" data-idx="${idx}" style="display:flex;gap:4px;align-items:center;margin-bottom:3px;">
+      <input type="text" data-field="name" value="${escapeHtml(s.name)}" placeholder="Name" style="flex:2;${INPUT_STYLE}">
+      ${buildSelectHTML('type', STATUS_TYPE_OPTIONS, s.type || 'buff')}
+      <input type="text" data-field="duration" value="${escapeHtml(s.duration || '')}" placeholder="Duration" style="flex:1;${INPUT_STYLE}">
+      <button class="rpg-edit-remove" style="font-size:10px;color:#ff6b6b;background:none;border:none;cursor:pointer;" title="Remove">✕</button>
+    </div>`
   ).join('');
 
   rpgStatOverlayContent.innerHTML = `
@@ -241,45 +382,146 @@ function enterEditMode(charId) {
       <div style="flex:1;">
         <div style="margin-bottom:6px;">
           <label style="font-size:10px;color:#888;">Name</label>
-          <input type="text" id="rpgEditName" value="${escapeHtml(char.name)}" style="width:100%;background:var(--bg-input);color:#fff;border:1px solid #555;border-radius:3px;padding:2px 6px;font-size:12px;">
+          <input type="text" id="rpgEditName" value="${escapeHtml(char.name)}" style="width:100%;${INPUT_STYLE}font-size:12px;">
         </div>
         <div style="display:flex;gap:6px;margin-bottom:6px;">
           <div style="flex:1;">
             <label style="font-size:10px;color:#888;">Class</label>
-            <input type="text" id="rpgEditClass" value="${escapeHtml(char.class || '')}" style="width:100%;background:var(--bg-input);color:#fff;border:1px solid #555;border-radius:3px;padding:2px 6px;font-size:11px;">
+            <input type="text" id="rpgEditClass" value="${escapeHtml(char.class || '')}" style="width:100%;${INPUT_STYLE}">
           </div>
           <div style="flex:1;">
             <label style="font-size:10px;color:#888;">Subclass</label>
-            <input type="text" id="rpgEditSubclass" value="${escapeHtml(char.subclass || '')}" style="width:100%;background:var(--bg-input);color:#fff;border:1px solid #555;border-radius:3px;padding:2px 6px;font-size:11px;">
+            <input type="text" id="rpgEditSubclass" value="${escapeHtml(char.subclass || '')}" style="width:100%;${INPUT_STYLE}">
           </div>
         </div>
         <div style="display:flex;gap:6px;margin-bottom:6px;">
           <div style="flex:1;">
             <label style="font-size:10px;color:#888;">Level</label>
-            <input type="number" id="rpgEditLevel" value="${char.level || ''}" style="width:100%;background:var(--bg-input);color:#fff;border:1px solid #555;border-radius:3px;padding:2px 6px;font-size:11px;">
+            <input type="number" id="rpgEditLevel" value="${char.level || ''}" style="width:100%;${INPUT_STYLE}">
           </div>
           <div style="flex:1;">
             <label style="font-size:10px;color:#888;">Race</label>
-            <input type="text" id="rpgEditRace" value="${escapeHtml(char.race || '')}" style="width:100%;background:var(--bg-input);color:#fff;border:1px solid #555;border-radius:3px;padding:2px 6px;font-size:11px;">
+            <input type="text" id="rpgEditRace" value="${escapeHtml(char.race || '')}" style="width:100%;${INPUT_STYLE}">
           </div>
         </div>
       </div>
     </div>
     ${statsInputs ? `<div class="rpg-stat-grid">${statsInputs}</div>` : '<div style="font-size:10px;color:#666;">No stats to edit.</div>'}
+
+    <details class="lore-section" style="margin-top:8px;" open>
+      <summary style="font-size:11px;color:#aaa;cursor:pointer;">Abilities (${(char.abilities || []).length})</summary>
+      <div id="rpgEditAbilities">${abilitiesRows || '<div style="font-size:10px;color:#666;">None</div>'}</div>
+      <button class="rpg-edit-add" data-section="abilities" style="font-size:10px;margin-top:3px;padding:2px 8px;${INPUT_STYLE}cursor:pointer;">+ Add Ability</button>
+    </details>
+
+    <details class="lore-section" style="margin-top:6px;">
+      <summary style="font-size:11px;color:#aaa;cursor:pointer;">Equipment (${(char.equipment || []).length})</summary>
+      <div id="rpgEditEquipment">${equipmentRows || '<div style="font-size:10px;color:#666;">None</div>'}</div>
+      <button class="rpg-edit-add" data-section="equipment" style="font-size:10px;margin-top:3px;padding:2px 8px;${INPUT_STYLE}cursor:pointer;">+ Add Equipment</button>
+    </details>
+
+    <details class="lore-section" style="margin-top:6px;">
+      <summary style="font-size:11px;color:#aaa;cursor:pointer;">Inventory (${(char.inventory || []).length})</summary>
+      <div id="rpgEditInventory">${inventoryRows || '<div style="font-size:10px;color:#666;">None</div>'}</div>
+      <button class="rpg-edit-add" data-section="inventory" style="font-size:10px;margin-top:3px;padding:2px 8px;${INPUT_STYLE}cursor:pointer;">+ Add Item</button>
+    </details>
+
+    <details class="lore-section" style="margin-top:6px;">
+      <summary style="font-size:11px;color:#aaa;cursor:pointer;">Currency (${Object.keys(char.currency || {}).length})</summary>
+      <div id="rpgEditCurrency">${currencyRows || '<div style="font-size:10px;color:#666;">None</div>'}</div>
+      <button class="rpg-edit-add" data-section="currency" style="font-size:10px;margin-top:3px;padding:2px 8px;${INPUT_STYLE}cursor:pointer;">+ Add Currency</button>
+    </details>
+
+    <details class="lore-section" style="margin-top:6px;">
+      <summary style="font-size:11px;color:#aaa;cursor:pointer;">Status Effects (${(char.statusEffects || []).length})</summary>
+      <div id="rpgEditStatus">${statusRows || '<div style="font-size:10px;color:#666;">None</div>'}</div>
+      <button class="rpg-edit-add" data-section="statusEffects" style="font-size:10px;margin-top:3px;padding:2px 8px;${INPUT_STYLE}cursor:pointer;">+ Add Effect</button>
+    </details>
+
     <div style="display:flex;gap:6px;margin-top:8px;">
       <button class="rpg-stat-save-btn btn-accept" style="font-size:11px;padding:4px 12px;">Save</button>
       <button class="rpg-stat-cancel-btn btn-reject" style="font-size:11px;padding:4px 12px;">Cancel</button>
     </div>
   `;
 
+  // Wire dirty tracking
+  editDirty = false;
+  rpgStatOverlayContent.querySelectorAll('input, select').forEach(el => {
+    el.addEventListener('input', markEditDirty);
+  });
+
+  // Wire remove buttons
+  rpgStatOverlayContent.querySelectorAll('.rpg-edit-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      btn.closest('.rpg-edit-row').remove();
+      markEditDirty();
+    });
+  });
+
+  // Wire add buttons
+  rpgStatOverlayContent.querySelectorAll('.rpg-edit-add').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const section = btn.dataset.section;
+      const container = btn.previousElementSibling;
+      // Clear "None" placeholder
+      if (container.querySelector('div[style*="color:#666"]')) container.innerHTML = '';
+      const newRow = document.createElement('div');
+      newRow.className = 'rpg-edit-row';
+      newRow.dataset.section = section;
+      newRow.style.cssText = 'display:flex;gap:4px;align-items:center;margin-bottom:3px;';
+      newRow.innerHTML = getEmptyRowHTML(section);
+      container.appendChild(newRow);
+      newRow.querySelector('.rpg-edit-remove')?.addEventListener('click', () => { newRow.remove(); markEditDirty(); });
+      newRow.querySelectorAll('input, select').forEach(el => el.addEventListener('input', markEditDirty));
+      markEditDirty();
+    });
+  });
+
   const saveBtn = rpgStatOverlayContent.querySelector('.rpg-stat-save-btn');
   const cancelBtn = rpgStatOverlayContent.querySelector('.rpg-stat-cancel-btn');
   if (saveBtn) saveBtn.addEventListener('click', () => saveEdit(charId));
-  if (cancelBtn) cancelBtn.addEventListener('click', () => openStatOverlay(charId, getRpgState()));
+  if (cancelBtn) cancelBtn.addEventListener('click', () => {
+    if (editDirty && !confirm('Discard unsaved changes?')) return;
+    editDirty = false;
+    openStatOverlay(charId, getRpgState());
+  });
+}
+
+function getEmptyRowHTML(section) {
+  const rm = `<button class="rpg-edit-remove" style="font-size:10px;color:#ff6b6b;background:none;border:none;cursor:pointer;" title="Remove">✕</button>`;
+  switch (section) {
+    case 'abilities':
+      return `<input type="text" data-field="name" placeholder="Name" style="flex:2;${INPUT_STYLE}"><input type="number" data-field="level" placeholder="Lv" style="width:40px;${INPUT_STYLE}"><input type="text" data-field="description" placeholder="Description" style="flex:3;${INPUT_STYLE}">${rm}`;
+    case 'equipment':
+      return `<input type="text" data-field="name" placeholder="Name" style="flex:2;${INPUT_STYLE}">${buildSelectHTML('slot', SLOT_OPTIONS, 'other')}${buildSelectHTML('rarity', RARITY_OPTIONS, 'unknown')}<input type="text" data-field="description" placeholder="Description" style="flex:2;${INPUT_STYLE}">${rm}`;
+    case 'inventory':
+      return `<input type="text" data-field="name" placeholder="Name" style="flex:2;${INPUT_STYLE}"><input type="number" data-field="quantity" value="1" placeholder="Qty" style="width:45px;${INPUT_STYLE}">${buildSelectHTML('type', ['consumable','material','quest_item','other'], 'other')}${rm}`;
+    case 'currency':
+      return `<input type="text" data-field="unit" placeholder="Currency" style="flex:1;${INPUT_STYLE}"><input type="number" data-field="amount" placeholder="Amount" style="width:80px;${INPUT_STYLE}">${rm}`;
+    case 'statusEffects':
+      return `<input type="text" data-field="name" placeholder="Name" style="flex:2;${INPUT_STYLE}">${buildSelectHTML('type', STATUS_TYPE_OPTIONS, 'buff')}<input type="text" data-field="duration" placeholder="Duration" style="flex:1;${INPUT_STYLE}">${rm}`;
+    default: return '';
+  }
+}
+
+function collectEditRows(containerId) {
+  const container = rpgStatOverlayContent.querySelector(`#${containerId}`);
+  if (!container) return [];
+  const rows = [];
+  container.querySelectorAll('.rpg-edit-row').forEach(row => {
+    const data = {};
+    row.querySelectorAll('input, select').forEach(el => {
+      const field = el.dataset.field || el.dataset.stat;
+      if (field) data[field] = el.type === 'number' ? (el.value ? parseFloat(el.value) : null) : el.value.trim();
+    });
+    if (data.name || data.unit) rows.push(data);
+  });
+  return rows;
 }
 
 async function saveEdit(charId) {
   if (!rpgStatOverlayContent || !state.currentStoryId) return;
+  editDirty = false;
 
   const updates = {};
   const nameInput = rpgStatOverlayContent.querySelector('#rpgEditName');
@@ -308,14 +550,51 @@ async function saveEdit(charId) {
     updates.stats = stats;
   }
 
+  // Collect expanded section edits
+  const abilitiesData = collectEditRows('rpgEditAbilities');
+  if (abilitiesData.length > 0 || rpgStatOverlayContent.querySelector('#rpgEditAbilities')) {
+    updates.abilities = abilitiesData.map(a => ({
+      name: a.name, level: a.level || null, description: a.description || '', type: 'active', cost: null,
+    }));
+  }
+
+  const equipmentData = collectEditRows('rpgEditEquipment');
+  if (equipmentData.length > 0 || rpgStatOverlayContent.querySelector('#rpgEditEquipment')) {
+    updates.equipment = equipmentData.map(e => ({
+      name: e.name, slot: e.slot || 'other', rarity: e.rarity || 'unknown', description: e.description || '',
+    }));
+  }
+
+  const inventoryData = collectEditRows('rpgEditInventory');
+  if (inventoryData.length > 0 || rpgStatOverlayContent.querySelector('#rpgEditInventory')) {
+    updates.inventory = inventoryData.map(i => ({
+      name: i.name, quantity: i.quantity || 1, type: i.type || 'other',
+    }));
+  }
+
+  const currencyData = collectEditRows('rpgEditCurrency');
+  if (currencyData.length > 0 || rpgStatOverlayContent.querySelector('#rpgEditCurrency')) {
+    updates.currency = {};
+    for (const c of currencyData) {
+      if (c.unit) updates.currency[c.unit.toLowerCase()] = c.amount || 0;
+    }
+  }
+
+  const statusData = collectEditRows('rpgEditStatus');
+  if (statusData.length > 0 || rpgStatOverlayContent.querySelector('#rpgEditStatus')) {
+    updates.statusEffects = statusData.map(s => ({
+      name: s.name, type: s.type || 'buff', duration: s.duration || null,
+    }));
+  }
+
   const result = await window.sceneVisualizer.litrpgUpdateCharacter(state.currentStoryId, charId, updates);
   if (result.success) {
     state.litrpgState = result.state;
     refreshRpgUI();
     openStatOverlay(charId, getRpgState());
-    showToast('Character updated');
+    showToast('Character updated', 2000, 'success');
   } else {
-    showToast('Failed to save changes');
+    showToast(`Failed to save: ${result.error || 'Unknown error'}`, 3000, 'error');
   }
 }
 
@@ -326,7 +605,9 @@ async function deleteCharacter(charId) {
     state.litrpgState = result.state;
     closeStatOverlay();
     refreshRpgUI();
-    showToast('Character deleted');
+    showToast('Character deleted', 2000, 'success');
+  } else {
+    showToast(`Failed to delete: ${result.error || 'Unknown error'}`, 3000, 'error');
   }
 }
 
@@ -391,9 +672,17 @@ function buildQuestCardHTML(quest) {
 
 let npcSearchFilter = '';
 
+function highlightMatch(text, query) {
+  if (!query) return escapeHtml(text);
+  const escaped = escapeHtml(text);
+  const re = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  return escaped.replace(re, '<mark style="background:rgba(233,69,96,0.3);color:inherit;padding:0 1px;border-radius:2px;">$1</mark>');
+}
+
 function renderNPCs(rpg) {
   if (!rpgNpcList) return;
-  let npcs = Object.values(rpg.characters || {}).filter(c => c.isNPC);
+  const allNpcs = Object.values(rpg.characters || {}).filter(c => c.isNPC);
+  let npcs = allNpcs;
 
   // Apply search filter (Phase 5F)
   if (npcSearchFilter) {
@@ -406,19 +695,22 @@ function renderNPCs(rpg) {
     );
   }
 
-  rpgNpcCount.textContent = `(${npcs.length})`;
+  rpgNpcCount.textContent = npcSearchFilter
+    ? `(${npcs.length} of ${allNpcs.length})`
+    : `(${npcs.length})`;
 
   if (npcs.length === 0) {
     rpgNpcList.innerHTML = '<div style="font-size:11px;color:#666;padding:4px;">No NPCs tracked yet.</div>';
     return;
   }
 
+  const q = npcSearchFilter;
   rpgNpcList.innerHTML = npcs.map(npc => `
     <div class="rpg-npc-card">
-      <span class="rpg-npc-name">${escapeHtml(npc.name)}${npc.level ? ` (Lv.${npc.level})` : ''}${npc.class ? ` — ${escapeHtml(npc.class)}` : ''}</span>
-      ${npc.npcRole ? `<span style="font-size:9px;color:#a0a0ff;">${escapeHtml(npc.npcRole)}</span>` : ''}
-      ${npc.faction ? `<span style="font-size:9px;color:var(--cat-faction);">${escapeHtml(npc.faction)}</span>` : ''}
-      <span class="rpg-disposition ${npc.disposition || 'unknown'}">${escapeHtml((npc.disposition || 'unknown').toUpperCase())}</span>
+      <span class="rpg-npc-name">${highlightMatch(npc.name, q)}${npc.level ? ` (Lv.${npc.level})` : ''}${npc.class ? ` — ${highlightMatch(npc.class, q)}` : ''}</span>
+      ${npc.npcRole ? `<span style="font-size:9px;color:#a0a0ff;">${highlightMatch(npc.npcRole, q)}</span>` : ''}
+      ${npc.faction ? `<span style="font-size:9px;color:var(--cat-faction);">${highlightMatch(npc.faction, q)}</span>` : ''}
+      <span class="rpg-disposition ${npc.disposition || 'unknown'}">${highlightMatch((npc.disposition || 'unknown').toUpperCase(), q)}</span>
     </div>
   `).join('');
 }
@@ -480,7 +772,9 @@ function renderPendingUpdates(rpg) {
       if (result.success) {
         state.litrpgState = result.state;
         refreshRpgUI();
-        showToast('Update accepted');
+        showToast('Update accepted', 2000, 'success');
+      } else {
+        showToast(`Failed to accept: ${result.error || 'Unknown error'}`, 3000, 'error');
       }
     });
   });
@@ -611,12 +905,27 @@ async function uploadPortrait(charId) {
 // ACTIONS
 // =========================================================================
 
+let scanElapsedTimer = null;
+
 async function runRpgScan() {
   if (!state.currentStoryId || state.litrpgScanning) return;
   state.litrpgScanning = true;
   if (rpgScanStatus) rpgScanStatus.style.display = '';
-  if (rpgScanPhase) rpgScanPhase.textContent = 'Starting RPG scan...';
+  if (rpgScanPhase) {
+    rpgScanPhase.textContent = 'Starting RPG scan...';
+    rpgScanPhase.classList.add('rpg-scan-pulsing');
+  }
   if (rpgScanBtn) rpgScanBtn.disabled = true;
+
+  // Elapsed timer
+  const scanStartTime = Date.now();
+  if (scanElapsedTimer) clearInterval(scanElapsedTimer);
+  scanElapsedTimer = setInterval(() => {
+    if (!rpgScanPhase) return;
+    const elapsed = Math.round((Date.now() - scanStartTime) / 1000);
+    const base = rpgScanPhase.textContent.replace(/\s*\(\d+s\)$/, '');
+    rpgScanPhase.textContent = `${base} (${elapsed}s)`;
+  }, 1000);
 
   try {
     let storyText = '';
@@ -645,15 +954,45 @@ async function runRpgScan() {
     if (result.success) {
       state.litrpgState = result.state;
       refreshRpgUI();
-      showToast('RPG scan complete');
+
+      // Apply @role metadata updates to lorebook entries
+      if (result.roleUpdates && result.roleUpdates.length > 0) {
+        await applyRoleUpdatesToLorebook(result.roleUpdates);
+      }
+
+      // Push R4 lore entries into the Lore tab pending queue
+      if (result.pendingLoreEntries && result.pendingLoreEntries.length > 0) {
+        if (!state.loreState) state.loreState = { pendingEntries: [], rejectedNames: [] };
+        if (!state.loreState.pendingEntries) state.loreState.pendingEntries = [];
+        const existingNames = new Set((state.loreState.pendingEntries || []).map(e => e.displayName.toLowerCase()));
+        const rejectedNames = new Set((state.loreState.rejectedNames || []).map(n => n.toLowerCase()));
+        const newEntries = result.pendingLoreEntries.filter(e =>
+          !existingNames.has(e.displayName.toLowerCase()) && !rejectedNames.has(e.displayName.toLowerCase())
+        );
+        if (newEntries.length > 0) {
+          state.loreState.pendingEntries.push(...newEntries);
+          await saveLoreState();
+          refreshLoreUI();
+          showToast(`Found ${newEntries.length} RPG lore entr${newEntries.length === 1 ? 'y' : 'ies'} — check Lore tab`);
+        }
+      }
+
+      // R4 dedup transparency
+      if (result.r4Skipped > 0) {
+        showToast(`${result.r4Skipped} more RPG elements found but capped`, 3000);
+      }
+
+      showToast('RPG scan complete', 2000, 'success');
     } else {
-      showToast(`RPG scan failed: ${result.error}`);
+      showToast(`RPG scan failed: ${result.error || 'Unknown error'}`, 3000, 'error');
     }
   } catch (err) {
-    showToast('RPG scan error');
+    showToast(`RPG scan error: ${err.message || 'Unknown error'}`, 3000, 'error');
     console.error('[LitRPG] Scan error:', err);
   } finally {
     state.litrpgScanning = false;
+    if (scanElapsedTimer) { clearInterval(scanElapsedTimer); scanElapsedTimer = null; }
+    if (rpgScanPhase) rpgScanPhase.classList.remove('rpg-scan-pulsing');
     if (rpgScanStatus) rpgScanStatus.style.display = 'none';
     if (rpgScanBtn) rpgScanBtn.disabled = false;
   }
@@ -701,6 +1040,97 @@ async function syncToLorebook() {
   }
 
   showToast(synced > 0 ? `Synced ${synced} character${synced > 1 ? 's' : ''} to lorebook` : 'No characters to sync');
+}
+
+async function applyRoleUpdatesToLorebook(roleUpdates) {
+  if (!roleUpdates || roleUpdates.length === 0) return;
+  let updated = 0;
+
+  for (const { loreEntryName, role } of roleUpdates) {
+    try {
+      const entries = await webview.executeJavaScript(`
+        (function() {
+          if (window.__loreCreator && window.__loreCreator.getEntries) {
+            return window.__loreCreator.getEntries().filter(e => e.displayName === ${JSON.stringify(loreEntryName)});
+          }
+          return [];
+        })()
+      `);
+
+      if (entries.length === 0) continue;
+      const entry = entries[0];
+
+      const updatedText = await window.sceneVisualizer.litrpgBuildRoleUpdate(entry.text, role);
+      if (!updatedText) continue; // already correct
+
+      await webview.executeJavaScript(`
+        (function() {
+          if (window.__loreCreator && window.__loreCreator.updateEntry) {
+            window.__loreCreator.updateEntry({
+              displayName: ${JSON.stringify(loreEntryName)},
+              text: ${JSON.stringify(updatedText)}
+            });
+          }
+        })()
+      `);
+      updated++;
+    } catch (err) {
+      console.error(`[LitRPG] Role update failed for ${loreEntryName}:`, err);
+    }
+  }
+
+  if (updated > 0) {
+    console.log(`[LitRPG] Updated @role metadata for ${updated} lorebook entries`);
+  }
+}
+
+async function reverseSyncFromLorebook() {
+  const rpg = getRpgState();
+  if (!rpg.enabled) return;
+
+  if (rpgReverseSyncBtn) { rpgReverseSyncBtn.disabled = true; rpgReverseSyncBtn.textContent = '...'; }
+
+  try {
+    // Read lorebook entries via proxy
+    const entries = await webview.executeJavaScript(`
+      (function() {
+        if (window.__loreCreator && window.__loreCreator.getEntries) {
+          return window.__loreCreator.getEntries();
+        }
+        return [];
+      })()
+    `);
+
+    // Filter to character entries (check @type metadata or category)
+    const characterEntries = entries.filter(e => {
+      if (e.text && /^@type:\s*character/m.test(e.text)) return true;
+      // Fallback: check if it's in a characters category
+      return e.category === 'character' || (e.text && /^Name:/m.test(e.text) && /^(Age|Gender|Physical Appearance):/m.test(e.text));
+    });
+
+    if (characterEntries.length === 0) {
+      showToast('No character entries found in lorebook');
+      return;
+    }
+
+    const result = await window.sceneVisualizer.litrpgReverseSyncAll(characterEntries, state.currentStoryId);
+    if (result.success) {
+      if (result.updatedCount > 0) {
+        state.litrpgState = result.state;
+        refreshRpgUI();
+      }
+      showToast(result.updatedCount > 0
+        ? `Updated ${result.updatedCount} character${result.updatedCount > 1 ? 's' : ''} from lorebook`
+        : 'No RPG changes found in lorebook');
+    } else {
+      showToast('Reverse sync failed');
+    }
+  } catch (err) {
+    console.error('[LitRPG] Reverse sync error:', err);
+    showToast('Reverse sync failed: ' + (err.message || 'Unknown error'));
+  } finally {
+    if (rpgReverseSyncBtn) { rpgReverseSyncBtn.disabled = false; rpgReverseSyncBtn.textContent = 'Sync from Lorebook'; }
+  }
 }
 
 async function enableLitRPG() {
@@ -761,6 +1191,7 @@ function setupIPCListeners() {
         characters: 'Extracting character RPG data',
         quests: 'Scanning for quests',
         party: 'Classifying party & NPCs',
+        'lore-elements': 'Generating RPG lore entries',
         complete: 'Scan complete',
       };
       rpgScanPhase.textContent = phaseLabels[progress.phase] || progress.phase;
@@ -806,6 +1237,7 @@ export function init() {
   if (rpgDismissBtn) rpgDismissBtn.addEventListener('click', dismissDetection);
   if (rpgScanBtn) rpgScanBtn.addEventListener('click', runRpgScan);
   if (rpgSyncLorebookBtn) rpgSyncLorebookBtn.addEventListener('click', syncToLorebook);
+  if (rpgReverseSyncBtn) rpgReverseSyncBtn.addEventListener('click', reverseSyncFromLorebook);
   if (rpgDisableBtn) rpgDisableBtn.addEventListener('click', disableLitRPG);
 
   // Bulk actions (Phase 5B)

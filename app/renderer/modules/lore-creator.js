@@ -1,9 +1,9 @@
 // lore-creator.js — Lore scanning, organize, enrich, entry cards, comprehension, proxy communication
 
-import { state } from './state.js';
+import { state, bus } from './state.js';
 import {
   webview,
-  sceneTab, loreTab, memoryTab, rpgTab, sceneContent, loreContent, memoryContent, rpgContent,
+  sceneTab, loreTab, memoryTab, rpgTab, mediaTab, sceneContent, loreContent, memoryContent, rpgContent, mediaContent,
   loreScanBtn, loreOrganizeBtn, loreAcceptAllBtn, loreClearBtn,
   loreCleanupSection, loreCleanupList, loreCleanupCount, loreCleanupApplyAllBtn,
   loreScanStatus, loreScanPhase, loreScanProgressFill, loreError,
@@ -24,11 +24,207 @@ import {
   masterSummaryDisplay, masterSummaryText,
   entityProfilesList, entityCount, entityProfileCards,
   familyTreeSection, familyTreeContainer, familyTreeCount,
-  LORE_CATEGORIES, CATEGORY_NAMES,
+  loreCategoryToggles, loreAddCategoryBtn, loreDetectCategoriesBtn,
+  loreAddCategoryForm, loreNewCategoryName, loreNewCategoryColor,
+  loreAddCategoryConfirm, loreAddCategoryCancel, dynamicCategoriesStyle,
 } from './dom-refs.js';
 import { escapeHtml, showToast } from './utils.js';
 import { refreshMemoryUI } from './memory-manager.js';
 import { readStoryTextFromDOM, readMemoryFromDOM, writeMemoryToDOM } from './webview-polling.js';
+
+// =========================================================================
+// CATEGORY REGISTRY
+// Dynamic category system — builtins + per-story custom categories.
+// =========================================================================
+
+function needsDarkText(hexColor) {
+  const hex = hexColor.replace('#', '');
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+  // Perceived brightness (YIQ formula)
+  return (r * 299 + g * 587 + b * 114) / 1000 > 150;
+}
+
+function slugifyCategory(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+/** Derive singular/plural forms from a category name, avoiding mangling words like "Species", "Class", "Status". */
+function deriveSingularPlural(name) {
+  if (/ies$/i.test(name) && /[^aeiou]ies$/i.test(name) && !/(spec|ser|sper)ies$/i.test(name)) {
+    return { singular: name.slice(0, -3) + 'y', plural: name };
+  } else if (/ses$/i.test(name) || /xes$/i.test(name) || /zes$/i.test(name) || /ches$/i.test(name) || /shes$/i.test(name)) {
+    return { singular: name.slice(0, -2), plural: name };
+  } else if (/ss$/i.test(name) || /us$/i.test(name) || /is$/i.test(name) || /(spec|ser|sper)ies$/i.test(name)) {
+    return { singular: name, plural: name };
+  } else if (/s$/i.test(name)) {
+    return { singular: name.slice(0, -1), plural: name };
+  }
+  return { singular: name, plural: name + 's' };
+}
+
+function getCategoryDef(categoryId) {
+  if (!state.categoryRegistry) return null;
+  return state.categoryRegistry.find(c => c.id === categoryId) || null;
+}
+
+function getCategoryIds() {
+  if (!state.categoryRegistry) return ['character', 'location', 'item', 'faction', 'concept'];
+  return state.categoryRegistry.map(c => c.id);
+}
+
+function getCategoryDisplayName(categoryId) {
+  const def = getCategoryDef(categoryId);
+  return def ? def.displayName : (categoryId.charAt(0).toUpperCase() + categoryId.slice(1) + 's');
+}
+
+function injectCategoryStyles() {
+  if (!dynamicCategoriesStyle || !state.categoryRegistry) return;
+
+  let css = '';
+  for (const cat of state.categoryRegistry) {
+    const dark = needsDarkText(cat.color) ? 'color: #333;' : '';
+    css += `.lore-card.${cat.id} { border-left-color: ${cat.color}; }\n`;
+    css += `.category-badge.${cat.id} { background: ${cat.color}; ${dark} }\n`;
+    css += `.entity-profile-card.${cat.id} { border-left-color: ${cat.color}; }\n`;
+  }
+  dynamicCategoriesStyle.textContent = css;
+}
+
+function rebuildCategoryUI() {
+  if (!state.categoryRegistry) return;
+  const catIds = getCategoryIds();
+
+  // Rebuild toggles
+  if (loreCategoryToggles) {
+    loreCategoryToggles.innerHTML = '';
+    for (const cat of state.categoryRegistry) {
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset.cat = cat.id;
+      cb.checked = state.loreSettings ? state.loreSettings.enabledCategories[cat.id] !== false : true;
+      cb.addEventListener('change', saveLoreSettings);
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(' ' + cat.singularName));
+      if (!cat.isBuiltin) {
+        const removeBtn = document.createElement('span');
+        removeBtn.textContent = '\u00d7';
+        removeBtn.title = 'Remove custom category';
+        removeBtn.style.cssText = 'cursor:pointer;margin-left:3px;color:var(--text-dim);font-size:12px;';
+        removeBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!confirm(`Remove custom category "${cat.singularName}"?`)) return;
+          await window.sceneVisualizer.loreRemoveCustomCategory(state.currentStoryId, cat.id);
+          await loadCategoryRegistry();
+        });
+        label.appendChild(removeBtn);
+      }
+      loreCategoryToggles.appendChild(label);
+    }
+  }
+
+  // Rebuild scan menu
+  if (loreScanMenu) {
+    loreScanMenu.innerHTML = '';
+    const allBtn = document.createElement('button');
+    allBtn.dataset.scan = 'all';
+    allBtn.textContent = 'Scan All';
+    allBtn.addEventListener('click', () => {
+      state.scanMenuOpen = false;
+      loreScanMenu.style.display = 'none';
+      runLoreScan('all');
+    });
+    loreScanMenu.appendChild(allBtn);
+
+    for (const cat of state.categoryRegistry) {
+      const btn = document.createElement('button');
+      btn.dataset.scan = cat.id;
+      btn.textContent = cat.displayName;
+      btn.addEventListener('click', () => {
+        state.scanMenuOpen = false;
+        loreScanMenu.style.display = 'none';
+        runLoreScan(cat.id);
+      });
+      loreScanMenu.appendChild(btn);
+    }
+
+    const relBtn = document.createElement('button');
+    relBtn.dataset.scan = 'relationships';
+    relBtn.textContent = 'Relationships';
+    relBtn.addEventListener('click', () => {
+      state.scanMenuOpen = false;
+      loreScanMenu.style.display = 'none';
+      runLoreScan('relationships');
+    });
+    loreScanMenu.appendChild(relBtn);
+  }
+
+  // Rebuild create-entry category dropdown
+  if (loreCreateCategory) {
+    // Keep auto-detect option, remove others
+    while (loreCreateCategory.options.length > 1) {
+      loreCreateCategory.remove(1);
+    }
+    for (const cat of state.categoryRegistry) {
+      const opt = document.createElement('option');
+      opt.value = cat.id;
+      opt.textContent = cat.singularName;
+      loreCreateCategory.appendChild(opt);
+    }
+  }
+}
+
+export async function loadCategoryRegistry() {
+  if (!state.currentStoryId) return;
+  try {
+    state.categoryRegistry = await window.sceneVisualizer.loreGetCategoryRegistry(state.currentStoryId);
+  } catch (e) {
+    console.error('[Lore] Failed to load category registry:', e);
+    // Fallback to builtins
+    state.categoryRegistry = [
+      { id: 'character', displayName: 'Characters', singularName: 'Character', color: '#4d96ff', isBuiltin: true, template: 'character' },
+      { id: 'location', displayName: 'Locations', singularName: 'Location', color: '#6bcb77', isBuiltin: true, template: null },
+      { id: 'item', displayName: 'Items', singularName: 'Item', color: '#ffd93d', isBuiltin: true, template: null },
+      { id: 'faction', displayName: 'Factions', singularName: 'Faction', color: '#ff6b6b', isBuiltin: true, template: null },
+      { id: 'concept', displayName: 'Concepts', singularName: 'Concept', color: '#a855f7', isBuiltin: true, template: null },
+    ];
+  }
+
+  // Auto-detect lorebook categories and merge non-builtin ones into the registry
+  // (session-only, not persisted — re-detected on each story load)
+  try {
+    if (state.loreProxyReady) {
+      const lorebookCats = await loreCall('getCategories');
+      if (Array.isArray(lorebookCats) && lorebookCats.length > 0) {
+        const existingNames = new Set(state.categoryRegistry.map(c => c.displayName.toLowerCase()));
+        const autoColors = ['#ff9900', '#00bcd4', '#e91e63', '#8bc34a', '#9c27b0', '#ff5722', '#607d8b', '#cddc39'];
+        let colorIdx = 0;
+        for (const cat of lorebookCats) {
+          const name = (cat.name || '').trim();
+          if (!name || existingNames.has(name.toLowerCase())) continue;
+          const id = slugifyCategory(name);
+          if (!id || state.categoryRegistry.find(c => c.id === id)) continue;
+          const { singular, plural } = deriveSingularPlural(name);
+          state.categoryRegistry.push({
+            id, displayName: plural, singularName: singular,
+            color: autoColors[colorIdx++ % autoColors.length],
+            isBuiltin: false, template: null,
+          });
+          existingNames.add(name.toLowerCase());
+          console.log(`[Lore] Auto-detected lorebook category: ${name} → ${id}`);
+        }
+      }
+    }
+  } catch (e) {
+    console.log('[Lore] Lorebook category auto-detect skipped:', e.message);
+  }
+
+  injectCategoryStyles();
+  rebuildCategoryUI();
+}
 
 // =========================================================================
 // DIRECT NOVELAI STATE ACCESS
@@ -246,6 +442,8 @@ async function directGetMemory() {
 async function proxyCall(cmdLabel, resPrefix, resEnd, method, args) {
   const reqId = 'r' + Date.now() + Math.random().toString(36).slice(2, 8);
   const payload = JSON.stringify({ id: reqId, method, args: args || [] });
+  // DOM response element written by naiscript's writeDomResponse (works even when panel update fails)
+  const domResId = cmdLabel === '__LORE_PROXY_CMD__' ? '__lore_proxy_dom_res__' : '__memory_proxy_dom_res__';
 
   const code = `
     new Promise(function(resolve, reject) {
@@ -254,13 +452,12 @@ async function proxyCall(cmdLabel, resPrefix, resEnd, method, args) {
       var RES_END = ${JSON.stringify(resEnd)};
       var PAYLOAD = ${JSON.stringify(payload)};
       var REQ_ID = ${JSON.stringify(reqId)};
+      var DOM_RES_ID = ${JSON.stringify(domResId)};
 
       // Find the command input by placeholder or label marker text
       function findCmdInput() {
-        // Strategy 1: Find input by placeholder attribute
         var byPlaceholder = document.querySelector('input[placeholder="' + CMD_LABEL + '"], textarea[placeholder="' + CMD_LABEL + '"]');
         if (byPlaceholder) return byPlaceholder;
-        // Strategy 2: Walk text nodes looking for label text near an input
         var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         var node;
         while (node = walker.nextNode()) {
@@ -276,8 +473,9 @@ async function proxyCall(cmdLabel, resPrefix, resEnd, method, args) {
         return null;
       }
 
-      // Extract response JSON from the response marker text
+      // Extract response JSON — check both panel text markers AND DOM fallback element
       function readResponse() {
+        // Strategy 1: panel text markers (rendered by api.v1.ui.update)
         var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         var node;
         while (node = walker.nextNode()) {
@@ -286,8 +484,16 @@ async function proxyCall(cmdLabel, resPrefix, resEnd, method, args) {
           if (si !== -1) {
             var cs = si + RES_PREFIX.length;
             var ei = text.indexOf(RES_END, cs);
-            if (ei !== -1) return text.substring(cs, ei);
+            if (ei !== -1) {
+              var panelRaw = text.substring(cs, ei);
+              if (panelRaw && panelRaw.length > 0) return panelRaw;
+            }
           }
+        }
+        // Strategy 2: DOM element written by naiscript's writeDomResponse
+        var domEl = document.getElementById(DOM_RES_ID);
+        if (domEl && domEl.textContent && domEl.textContent.length > 0) {
+          return domEl.textContent;
         }
         return null;
       }
@@ -327,7 +533,7 @@ async function proxyCall(cmdLabel, resPrefix, resEnd, method, args) {
   return webview.executeJavaScript(code);
 }
 
-// Smart wrappers -- try proxy first, then direct access fallback
+// Smart wrappers -- try CDP first, then webview proxy, then direct fallbacks
 export async function loreCall(method, ...args) {
   // Try proxy first if available
   if (state.loreProxyReady) {
@@ -343,6 +549,16 @@ export async function loreCall(method, ...args) {
       return await readStoryTextFromDOM() || '';
     case 'getEntries':
       return await directGetEntries() || [];
+    case 'getCategories': {
+      const entries = await directGetEntries() || [];
+      const catMap = new Map();
+      for (const e of entries) {
+        if (e.category && !catMap.has(e.category)) {
+          catMap.set(e.category, { id: e.category, name: '', enabled: true });
+        }
+      }
+      return Array.from(catMap.values());
+    }
     case 'createEntry':
     case 'updateEntry':
     case 'deleteEntry':
@@ -367,10 +583,11 @@ export async function memoryCall(method, ...args) {
       return await readStoryTextFromDOM() || '';
     case 'getMemory':
       return await directGetMemory() || '';
-    case 'setMemory':
+    case 'setMemory': {
       const wrote = await writeMemoryToDOM(args[0]);
       if (!wrote) throw new Error('Memory textarea not found in DOM');
       return true;
+    }
     case 'countTokens':
       return Math.ceil((args[0] || '').length / 4);
     default:
@@ -384,10 +601,16 @@ export async function memoryCall(method, ...args) {
 
 export async function checkProxyStatus(cmdLabel, resPrefix) {
   try {
+    // Derive DOM channel IDs
+    const domCmdId = cmdLabel === '__LORE_PROXY_CMD__' ? '__lore_proxy_dom_cmd__' : '__memory_proxy_dom_cmd__';
+    const domResId = cmdLabel === '__LORE_PROXY_CMD__' ? '__lore_proxy_dom_res__' : '__memory_proxy_dom_res__';
+
     const proxyStatus = await webview.executeJavaScript(`
       (function() {
         var CMD = ${JSON.stringify(cmdLabel)};
         var RES = ${JSON.stringify(resPrefix)};
+        var DOM_CMD = ${JSON.stringify(domCmdId)};
+        var DOM_RES = ${JSON.stringify(domResId)};
         var foundCmd = false, foundRes = false;
         // Check placeholder attributes on inputs
         var byPlaceholder = document.querySelector('input[placeholder="' + CMD + '"], textarea[placeholder="' + CMD + '"]');
@@ -400,6 +623,10 @@ export async function checkProxyStatus(cmdLabel, resPrefix) {
           if (node.textContent.indexOf(RES) !== -1) foundRes = true;
           if (foundCmd && foundRes) return 'ready';
         }
+        // Also check DOM channel elements (fallback indicators)
+        if (!foundCmd && document.getElementById(DOM_CMD)) foundCmd = true;
+        if (!foundRes && document.getElementById(DOM_RES)) foundRes = true;
+        if (foundCmd && foundRes) return 'ready';
         if (foundCmd || foundRes) return 'partial';
         return 'not-found';
       })()
@@ -414,6 +641,7 @@ export async function checkProxyStatus(cmdLabel, resPrefix) {
 async function loadLoreState() {
   if (!state.currentStoryId) return;
   state.loreState = await window.sceneVisualizer.loreGetState(state.currentStoryId);
+  await loadCategoryRegistry();
   refreshLoreUI();
 }
 
@@ -499,14 +727,16 @@ export function refreshLoreUI() {
 
 function cycleCategoryBadge(badge, getCurrent, onChanged) {
   const current = getCurrent();
-  const idx = LORE_CATEGORIES.indexOf(current);
-  const next = LORE_CATEGORIES[(idx + 1) % LORE_CATEGORIES.length];
+  const catIds = getCategoryIds();
+  const idx = catIds.indexOf(current);
+  const next = catIds[(idx + 1) % catIds.length];
+  const def = getCategoryDef(next);
   badge.className = `category-badge editable ${next}`;
-  badge.textContent = next.toUpperCase();
+  badge.textContent = def ? def.singularName.toUpperCase() : next.toUpperCase();
   // Update the card's outer class too
   const card = badge.closest('.lore-card');
   if (card) {
-    for (const cat of LORE_CATEGORIES) card.classList.remove(cat);
+    for (const cat of catIds) card.classList.remove(cat);
     card.classList.add(next);
   }
   onChanged(next);
@@ -517,15 +747,23 @@ function createEntryCard(entry) {
   card.className = `lore-card ${entry.category || ''}`;
   card.dataset.entryId = entry.id;
 
-  const isCharacter = entry.category === 'character';
-  const reformatBtn = isCharacter
+  // Show reformat button for any entry type that has a template
+  const templateTypes = ['character', 'location', 'item', 'faction', 'concept'];
+  const hasTemplate = templateTypes.includes(entry.category);
+  const reformatBtn = hasTemplate
     ? `<button class="btn-reformat" data-action="reformat" data-id="${entry.id}" style="background:#4d96ff;color:#fff;border:none;padding:4px 8px;font-size:10px;border-radius:3px;cursor:pointer;">Reformat</button>`
+    : '';
+
+  // Show @v2 badge if entry has metadata header
+  const hasMetaHeader = entry.text && /^@type:\s*\S/m.test(entry.text);
+  const metaBadge = hasMetaHeader
+    ? '<span style="background:#374151;color:#9ca3af;font-size:9px;padding:1px 4px;border-radius:3px;margin-left:4px;">@v2</span>'
     : '';
 
   card.innerHTML = `
     <div class="lore-card-header">
-      <span class="category-badge editable ${entry.category || ''}" title="Click to change type">${(entry.category || '').toUpperCase()}</span>
-      <span class="entry-name">${escapeHtml(entry.displayName)}</span>
+      <span class="category-badge editable ${entry.category || ''}" title="Click to change type">${((getCategoryDef(entry.category) || {}).singularName || entry.category || '').toUpperCase()}</span>
+      <span class="entry-name">${escapeHtml(entry.displayName)}${metaBadge}</span>
     </div>
     <div class="lore-card-text">${escapeHtml(entry.text)}</div>
     <div class="lore-card-keys">Keys: ${(entry.keys || []).map(k => escapeHtml(k)).join(', ')}</div>
@@ -547,7 +785,7 @@ function createEntryCard(entry) {
   card.querySelector('[data-action="accept"]').addEventListener('click', () => acceptEntry(entry.id));
   card.querySelector('[data-action="reject"]').addEventListener('click', () => rejectEntry(entry.id));
   card.querySelector('[data-action="edit"]').addEventListener('click', () => editEntry(entry.id, card));
-  if (isCharacter) {
+  if (hasTemplate) {
     card.querySelector('[data-action="reformat"]').addEventListener('click', () => reformatEntry(entry.id));
   }
 
@@ -559,7 +797,7 @@ function createMergeCard(merge) {
   card.className = `lore-card ${merge.newCategory || ''}`;
   card.innerHTML = `
     <div class="lore-card-header">
-      <span class="category-badge editable ${merge.newCategory || ''}" title="Click to change type">${(merge.newCategory || '').toUpperCase()}</span>
+      <span class="category-badge editable ${merge.newCategory || ''}" title="Click to change type">${((getCategoryDef(merge.newCategory) || {}).singularName || merge.newCategory || '').toUpperCase()}</span>
       <span class="entry-name">${escapeHtml(merge.newName)} &rarr; ${escapeHtml(merge.existingDisplayName)}</span>
     </div>
     <div class="lore-card-text">${escapeHtml(merge.proposedText)}</div>
@@ -601,7 +839,7 @@ function createUpdateCard(update) {
     : '';
   card.innerHTML = `
     <div class="lore-card-header">
-      <span class="category-badge editable ${update.category || ''}" title="Click to change type">${(update.category || '').toUpperCase()}</span>
+      <span class="category-badge editable ${update.category || ''}" title="Click to change type">${((getCategoryDef(update.category) || {}).singularName || update.category || '').toUpperCase()}</span>
       <span class="entry-name">${escapeHtml(update.displayName)}${typeBadge}</span>
     </div>
     ${nameReasonHtml}
@@ -644,7 +882,7 @@ async function getCategoryForType(entryType) {
   }
   if (!state.loreState.loreCategoryIds) state.loreState.loreCategoryIds = {};
 
-  const catName = CATEGORY_NAMES[entryType] || 'Lore Creator';
+  const catName = getCategoryDisplayName(entryType);
   if (state.loreState.loreCategoryIds[catName]) return state.loreState.loreCategoryIds[catName];
 
   try {
@@ -688,7 +926,13 @@ async function acceptEntry(entryId) {
   } catch (e) { /* proceed on error */ }
 
   try {
-    const categoryId = await getCategoryForType(entry.category);
+    // Determine category: prefer @type metadata if present, fall back to entry.category
+    let entryCategory = entry.category;
+    if (entry.text && /^@type:\s*\S/m.test(entry.text)) {
+      const metaMatch = entry.text.match(/^@type:\s*(\S+)/m);
+      if (metaMatch) entryCategory = metaMatch[1];
+    }
+    const categoryId = await getCategoryForType(entryCategory);
 
     const entryData = {
       displayName: entry.displayName,
@@ -942,6 +1186,16 @@ async function runLoreScan(scanType = 'all') {
 
     // Get existing entries (smart: proxy -> direct React state fallback)
     let existingEntries = await loreCall('getEntries');
+    if (!existingEntries || !Array.isArray(existingEntries)) existingEntries = [];
+
+    // Safety: if we have accepted entries but getEntries returned nothing,
+    // the proxy/fallback likely failed — warn rather than create duplicates
+    const acceptedCount = (state.loreState?.acceptedEntryIds || []).length;
+    if (existingEntries.length === 0 && acceptedCount > 0) {
+      console.warn('[Lore] getEntries returned empty but we have', acceptedCount, 'accepted entries — lorebook read may have failed');
+      showLoreError('Could not read lorebook entries. Open Script Manager and ensure the Lore Creator Proxy script is active.');
+      return;
+    }
 
     // Build scan options based on type
     const scanOptions = {};
@@ -1066,24 +1320,138 @@ function createCleanupCard(cleanup) {
         <button class="btn-reject" data-action="reject-cleanup">Dismiss</button>
       </div>
     `;
+  } else if (cleanup.type === 'duplicate-group') {
+    const removeNames = cleanup.removeEntries.map(e => escapeHtml(e.displayName)).join(', ');
+    const totalCount = 1 + cleanup.removeEntries.length;
+    card.innerHTML = `
+      <div class="lore-card-header">
+        <span class="category-badge cleanup">DUPLICATES (${totalCount})</span>
+        <span class="entry-name">${escapeHtml(cleanup.keepEntry.displayName)}</span>
+      </div>
+      <div style="font-size:11px;color:#bbb;margin-bottom:6px;">
+        <div style="margin-bottom:4px;"><strong style="color:#10b981;">Keep:</strong> ${escapeHtml(cleanup.keepEntry.displayName)}</div>
+        <div><strong style="color:#ef4444;">Remove:</strong> ${removeNames}</div>
+      </div>
+      <details style="margin-bottom:6px;">
+        <summary style="font-size:10px;color:#888;cursor:pointer;">Merged text preview</summary>
+        <div class="cleanup-text" style="margin-top:4px;max-height:150px;overflow-y:auto;">${escapeHtml((cleanup.mergedText || '').slice(0, 500))}</div>
+      </details>
+      <div style="font-size:10px;color:#f59e0b;margin-bottom:6px;">${escapeHtml(cleanup.reason || '')}</div>
+      <div class="lore-card-actions">
+        <button class="btn-accept" data-action="accept-cleanup">Merge All</button>
+        <button class="btn-reject" data-action="reject-cleanup">Dismiss</button>
+      </div>
+    `;
+  } else if (cleanup.type === 'add-metadata') {
+    const metaDef = getCategoryDef(cleanup.proposedType);
+    const metaLabel = metaDef ? metaDef.singularName.toUpperCase() : (cleanup.proposedType || '').toUpperCase();
+    card.className = `lore-card cleanup ${cleanup.proposedType || ''}`;
+    card.innerHTML = `
+      <div class="lore-card-header">
+        <span class="category-badge cleanup">ADD HEADER</span>
+        <span class="entry-name">${cleanup.displayName}</span>
+      </div>
+      <div style="font-size:11px;color:#bbb;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+        Add @type: <span class="category-badge editable ${cleanup.proposedType || ''}" title="Click to change type">${metaLabel}</span> metadata header
+      </div>
+      <div class="lore-card-actions">
+        <button class="btn-accept" data-action="accept-cleanup">Add Header</button>
+        <button class="btn-reject" data-action="reject-cleanup">Dismiss</button>
+      </div>
+    `;
+
+    // Wire category badge cycling for add-metadata cards
+    card.querySelector('.category-badge.editable').addEventListener('click', (e) => {
+      e.stopPropagation();
+      cycleCategoryBadge(e.target, () => cleanup.proposedType, (newCat) => {
+        cleanup.proposedType = newCat;
+        saveLoreState();
+      });
+    });
   } else {
     // recategorize or legacy-move
     const label = cleanup.type === 'legacy-move' ? 'UNCATEGORIZED' : 'MISPLACED';
+    const proposedDef = getCategoryDef(cleanup.proposedType);
+    const proposedLabel = proposedDef ? proposedDef.singularName.toUpperCase() : (cleanup.proposedType || '').toUpperCase();
+    card.className = `lore-card cleanup ${cleanup.proposedType || ''}`;
     card.innerHTML = `
       <div class="lore-card-header">
         <span class="category-badge cleanup">${label}</span>
         <span class="entry-name">${cleanup.displayName}</span>
       </div>
-      <div style="font-size:11px;color:#bbb;margin-bottom:8px;">
+      <div style="font-size:11px;color:#bbb;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
         <span style="color:#888;">${cleanup.currentCategory}</span>
         <span class="cleanup-arrow"> → </span>
-        <span style="color:#f59e0b;">${cleanup.proposedCategory}</span>
+        <span class="category-badge editable ${cleanup.proposedType || ''}" title="Click to change">${proposedLabel}</span>
+        <button class="btn-new-cat" title="Create new category" style="background:none;border:1px solid #555;color:#aaa;font-size:10px;padding:1px 6px;border-radius:3px;cursor:pointer;">+ New</button>
+      </div>
+      <div class="cleanup-new-cat-form" style="display:none;margin-bottom:8px;gap:6px;align-items:center;flex-wrap:wrap;">
+        <input type="text" placeholder="Category name" class="new-cat-name" style="background:#2a2a40;border:1px solid #555;color:#eee;padding:3px 6px;font-size:11px;border-radius:3px;width:120px;">
+        <input type="color" value="#ff9900" class="new-cat-color" style="width:28px;height:22px;border:none;padding:0;cursor:pointer;background:transparent;">
+        <button class="new-cat-confirm" style="background:#10b981;color:#fff;border:none;padding:3px 8px;font-size:10px;border-radius:3px;cursor:pointer;">Add</button>
+        <button class="new-cat-cancel" style="background:none;border:1px solid #555;color:#aaa;padding:3px 8px;font-size:10px;border-radius:3px;cursor:pointer;">Cancel</button>
       </div>
       <div class="lore-card-actions">
         <button class="btn-accept" data-action="accept-cleanup">Move</button>
         <button class="btn-reject" data-action="reject-cleanup">Dismiss</button>
       </div>
     `;
+
+    // Wire category badge cycling
+    card.querySelector('.category-badge.editable').addEventListener('click', (e) => {
+      e.stopPropagation();
+      cycleCategoryBadge(e.target, () => cleanup.proposedType, (newCat) => {
+        cleanup.proposedType = newCat;
+        cleanup.proposedCategory = getCategoryDisplayName(newCat);
+        cleanup.proposedCategoryId = null;
+        saveLoreState();
+      });
+    });
+
+    // Wire "+ New" button
+    const newCatForm = card.querySelector('.cleanup-new-cat-form');
+    card.querySelector('.btn-new-cat').addEventListener('click', (e) => {
+      e.stopPropagation();
+      newCatForm.style.display = 'flex';
+    });
+    newCatForm.querySelector('.new-cat-cancel').addEventListener('click', (e) => {
+      e.stopPropagation();
+      newCatForm.style.display = 'none';
+      newCatForm.querySelector('.new-cat-name').value = '';
+    });
+    newCatForm.querySelector('.new-cat-confirm').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const nameInput = newCatForm.querySelector('.new-cat-name');
+      const colorInput = newCatForm.querySelector('.new-cat-color');
+      const name = nameInput.value.trim();
+      if (!name) { showToast('Enter a category name'); return; }
+      const id = slugifyCategory(name);
+      if (!id) { showToast('Invalid category name'); return; }
+      const color = colorInput.value || '#ff9900';
+      const { singular, plural } = deriveSingularPlural(name);
+      const result = await window.sceneVisualizer.loreAddCustomCategory(state.currentStoryId, {
+        id, displayName: plural, singularName: singular, color,
+      });
+      if (result.success) {
+        await loadCategoryRegistry();
+        cleanup.proposedType = id;
+        cleanup.proposedCategory = plural;
+        cleanup.proposedCategoryId = null;
+        // Update the badge
+        const badge = card.querySelector('.category-badge.editable');
+        badge.className = `category-badge editable ${id}`;
+        badge.textContent = singular.toUpperCase();
+        // Update card border color
+        for (const cat of getCategoryIds()) card.classList.remove(cat);
+        card.classList.add(id);
+        saveLoreState();
+        showToast(`Added category "${singular}"`);
+        newCatForm.style.display = 'none';
+        nameInput.value = '';
+      } else {
+        showToast(result.error || 'Failed to add category');
+      }
+    });
   }
 
   card.querySelector('[data-action="accept-cleanup"]').addEventListener('click', () => acceptCleanup(cleanup.id));
@@ -1107,8 +1475,10 @@ async function acceptCleanup(cleanupId) {
   if (cleanup.type === 'duplicate') {
     // Update keep entry with merged text/keys
     const entries = await loreCall('getEntries');
+    console.log(`[Lore] Pairwise merge: keeper id=${cleanup.keepEntry.id} name="${cleanup.keepEntry.displayName}", remove id=${cleanup.removeEntry.id} name="${cleanup.removeEntry.displayName}"`);
     const keepEntry = entries.find(e => e.id === cleanup.keepEntry.id || e.displayName.toLowerCase() === cleanup.keepEntry.displayName.toLowerCase());
-    const removeEntry = entries.find(e => e.id === cleanup.removeEntry.id || e.displayName.toLowerCase() === cleanup.removeEntry.displayName.toLowerCase());
+    const keepId = keepEntry ? keepEntry.id : null;
+    console.log(`[Lore] Keeper found: ${keepEntry ? `id=${keepEntry.id}` : 'NOT FOUND'}`);
 
     if (keepEntry) {
       await loreCall('updateEntry', keepEntry.id, {
@@ -1116,10 +1486,68 @@ async function acceptCleanup(cleanupId) {
         keys: cleanup.mergedKeys,
       });
     }
+    // Exclude keeper ID so name-based fallback doesn't match it
+    const removeEntry = entries.find(e =>
+      e.id !== keepId && (e.id === cleanup.removeEntry.id || e.displayName.toLowerCase() === cleanup.removeEntry.displayName.toLowerCase())
+    );
+    console.log(`[Lore] Remove found: ${removeEntry ? `id=${removeEntry.id}` : 'NOT FOUND'}`);
     if (removeEntry) {
-      await loreCall('deleteEntry', removeEntry.id);
+      const deleteResult = await loreCall('deleteEntry', removeEntry.id);
+      console.log(`[Lore] Delete result:`, deleteResult);
     }
     showToast(`Merged "${cleanup.removeEntry.displayName}" into "${cleanup.keepEntry.displayName}"`);
+  } else if (cleanup.type === 'duplicate-group') {
+    // N-way merge: update keeper, delete all others
+    const entries = await loreCall('getEntries');
+    console.log(`[Lore] Duplicate-group merge: ${entries.length} entries in lorebook`);
+    console.log(`[Lore] Looking for keeper: id=${cleanup.keepEntry.id}, name="${cleanup.keepEntry.displayName}"`);
+    const keepEntry = entries.find(e => e.id === cleanup.keepEntry.id || e.displayName.toLowerCase() === cleanup.keepEntry.displayName.toLowerCase());
+    const keepId = keepEntry ? keepEntry.id : null;
+    console.log(`[Lore] Keeper found: ${keepEntry ? `id=${keepEntry.id}, name="${keepEntry.displayName}"` : 'NOT FOUND'}`);
+
+    if (keepEntry) {
+      await loreCall('updateEntry', keepEntry.id, {
+        text: cleanup.mergedText,
+        keys: cleanup.mergedKeys,
+      });
+      console.log(`[Lore] Keeper updated with merged text (${(cleanup.mergedText || '').length} chars)`);
+    }
+
+    // Delete all removeEntries — exclude keeper ID and already-deleted IDs
+    // to avoid matching the wrong entry when names collide
+    let deleted = 0;
+    const deletedIds = new Set();
+    if (keepId) deletedIds.add(keepId);
+    for (const re of cleanup.removeEntries) {
+      console.log(`[Lore] Looking for removal: id=${re.id}, name="${re.displayName}"`);
+      // Prefer ID match, fall back to name match excluding already-processed entries
+      const removeEntry = entries.find(e =>
+        !deletedIds.has(e.id) && (e.id === re.id || e.displayName.toLowerCase() === re.displayName.toLowerCase())
+      );
+      if (removeEntry) {
+        console.log(`[Lore] Deleting: id=${removeEntry.id}, name="${removeEntry.displayName}"`);
+        const deleteResult = await loreCall('deleteEntry', removeEntry.id);
+        console.log(`[Lore] Delete result:`, deleteResult);
+        deletedIds.add(removeEntry.id);
+        deleted++;
+      } else {
+        console.warn(`[Lore] Removal target NOT FOUND: id=${re.id}, name="${re.displayName}"`);
+      }
+    }
+    showToast(`Merged ${deleted + 1} entries into "${cleanup.keepEntry.displayName}"`);
+  } else if (cleanup.type === 'add-metadata') {
+    // Prepend metadata header to existing entry text
+    const metadataResult = await window.sceneVisualizer.loreSetMetadata(cleanup.currentText, {
+      type: cleanup.proposedType,
+      updated: new Date().toISOString().slice(0, 10),
+      source: 'import',
+    });
+    if (metadataResult) {
+      await loreCall('updateEntry', cleanup.entryId, { text: metadataResult });
+      showToast(`Added header to "${cleanup.displayName}"`);
+    } else {
+      showToast('Failed to add metadata header');
+    }
   } else {
     // recategorize or legacy-move
     const catId = cleanup.proposedCategoryId || await getCategoryForType(cleanup.proposedType);
@@ -1150,11 +1578,12 @@ async function rejectCleanup(cleanupId) {
   refreshLoreUI();
 }
 
-// ---- Reformat Entry (for pending character entries) ----
+// ---- Reformat Entry (for pending entries with templates) ----
 async function reformatEntry(entryId) {
   if (!state.loreState) return;
   const entry = state.loreState.pendingEntries.find(e => e.id === entryId);
-  if (!entry || entry.category !== 'character') return;
+  const templateTypes = ['character', 'location', 'item', 'faction', 'concept'];
+  if (!entry || !templateTypes.includes(entry.category)) return;
 
   const card = lorePendingList.querySelector(`[data-entry-id="${entryId}"]`);
   if (card) {
@@ -1170,7 +1599,7 @@ async function reformatEntry(entryId) {
       storyText = await loreCall('getStoryText') || '';
     } catch (_) {}
 
-    const result = await window.sceneVisualizer.loreReformatEntry(entry.displayName, entry.text, storyText, state.currentStoryId);
+    const result = await window.sceneVisualizer.loreReformatEntry(entry.displayName, entry.text, storyText, state.currentStoryId, entry.category);
     if (result.success && result.result) {
       entry.text = result.result;
       await saveLoreState();
@@ -1693,9 +2122,11 @@ async function updateLlmIndicator(provider, model) {
 
 function saveLoreSettings() {
   const cats = {};
-  document.querySelectorAll('.lore-category-toggles input[data-cat]').forEach(cb => {
-    cats[cb.dataset.cat] = cb.checked;
-  });
+  if (loreCategoryToggles) {
+    loreCategoryToggles.querySelectorAll('input[data-cat]').forEach(cb => {
+      cats[cb.dataset.cat] = cb.checked;
+    });
+  }
   state.loreSettings = {
     autoScan: loreAutoScan.checked,
     autoDetectUpdates: loreAutoUpdates.checked,
@@ -1735,6 +2166,7 @@ export function switchPanelTab(tab) {
   loreTab.classList.remove('active');
   memoryTab.classList.remove('active');
   if (rpgTab) rpgTab.classList.remove('active');
+  if (mediaTab) mediaTab.classList.remove('active');
   sceneContent.classList.remove('active');
   sceneContent.style.display = 'none';
   loreContent.classList.remove('active');
@@ -1742,6 +2174,7 @@ export function switchPanelTab(tab) {
   memoryContent.classList.remove('active');
   memoryContent.style.display = 'none';
   if (rpgContent) { rpgContent.classList.remove('active'); rpgContent.style.display = 'none'; }
+  if (mediaContent) { mediaContent.classList.remove('active'); mediaContent.style.display = 'none'; }
 
   if (tab === 'scene') {
     sceneTab.classList.add('active');
@@ -1762,6 +2195,10 @@ export function switchPanelTab(tab) {
     if (rpgContent) { rpgContent.classList.add('active'); rpgContent.style.display = ''; }
     // refreshRpgUI is called from litrpg-panel.js
     import('./litrpg-panel.js').then(m => m.refreshRpgUI && m.refreshRpgUI());
+  } else if (tab === 'media') {
+    if (mediaTab) mediaTab.classList.add('active');
+    if (mediaContent) { mediaContent.classList.add('active'); mediaContent.style.display = ''; }
+    bus.emit('media:tab-activated');
   }
 }
 
@@ -1771,6 +2208,7 @@ export function init() {
   loreTab.addEventListener('click', () => switchPanelTab('lore'));
   memoryTab.addEventListener('click', () => switchPanelTab('memory'));
   if (rpgTab) rpgTab.addEventListener('click', () => switchPanelTab('rpg'));
+  if (mediaTab) mediaTab.addEventListener('click', () => switchPanelTab('media'));
 
   // Initialize lore settings
   (async function initLore() {
@@ -1784,10 +2222,8 @@ export function init() {
       loreTempValue.textContent = state.loreSettings.temperature;
       loreDetailLevel.value = state.loreSettings.detailLevel;
 
-      // Category toggles
-      document.querySelectorAll('.lore-category-toggles input[data-cat]').forEach(cb => {
-        cb.checked = state.loreSettings.enabledCategories[cb.dataset.cat] !== false;
-      });
+      // Load category registry and rebuild UI (handles toggles)
+      await loadCategoryRegistry();
 
       // LLM provider
       const llmConfig = await window.sceneVisualizer.loreGetLlmProvider();
@@ -1822,9 +2258,7 @@ export function init() {
     saveLoreSettings();
   });
   loreDetailLevel.addEventListener('change', saveLoreSettings);
-  document.querySelectorAll('.lore-category-toggles input[data-cat]').forEach(cb => {
-    cb.addEventListener('change', saveLoreSettings);
-  });
+  // Category toggle change handlers are attached dynamically in rebuildCategoryUI()
 
   loreLlmSelect.addEventListener('change', async () => {
     const provider = loreLlmSelect.value;
@@ -1842,6 +2276,112 @@ export function init() {
 
   loreOllamaRefreshBtn.addEventListener('click', refreshOllamaModels);
 
+  // Category management buttons
+  if (loreAddCategoryBtn) {
+    loreAddCategoryBtn.addEventListener('click', () => {
+      if (loreAddCategoryForm) loreAddCategoryForm.style.display = '';
+    });
+  }
+  if (loreAddCategoryCancel) {
+    loreAddCategoryCancel.addEventListener('click', () => {
+      if (loreAddCategoryForm) loreAddCategoryForm.style.display = 'none';
+      if (loreNewCategoryName) loreNewCategoryName.value = '';
+    });
+  }
+  if (loreAddCategoryConfirm) {
+    loreAddCategoryConfirm.addEventListener('click', async () => {
+      if (!loreNewCategoryName || !state.currentStoryId) return;
+      const name = loreNewCategoryName.value.trim();
+      if (!name) { showToast('Enter a category name'); return; }
+
+      const id = slugifyCategory(name);
+      if (!id) { showToast('Invalid category name'); return; }
+
+      const color = loreNewCategoryColor ? loreNewCategoryColor.value : '#ff9900';
+      const { singular, plural } = deriveSingularPlural(name);
+
+      const result = await window.sceneVisualizer.loreAddCustomCategory(state.currentStoryId, {
+        id,
+        displayName: plural,
+        singularName: singular,
+        color,
+      });
+
+      if (result.success) {
+        showToast(`Added category "${singular}"`);
+        if (loreNewCategoryName) loreNewCategoryName.value = '';
+        if (loreAddCategoryForm) loreAddCategoryForm.style.display = 'none';
+        await loadCategoryRegistry();
+      } else {
+        showToast(result.error || 'Failed to add category');
+      }
+    });
+  }
+  if (loreDetectCategoriesBtn) {
+    loreDetectCategoriesBtn.addEventListener('click', async () => {
+      if (!state.currentStoryId) return;
+      loreDetectCategoriesBtn.disabled = true;
+      loreDetectCategoriesBtn.textContent = 'Detecting...';
+      try {
+        // Ensure category registry is loaded
+        if (!state.categoryRegistry) await loadCategoryRegistry();
+
+        await checkLoreProxy();
+        const lorebookCats = await loreCall('getCategories');
+        if (!lorebookCats || lorebookCats.length === 0) {
+          showToast('No lorebook categories found');
+          return;
+        }
+
+        // Filter out categories already in registry
+        const existingIds = new Set(getCategoryIds());
+        const existingNames = new Set((state.categoryRegistry || []).map(c => c.displayName.toLowerCase()));
+        const novel = lorebookCats.filter(c => {
+          const name = (c.name || '').toLowerCase();
+          return name && !existingNames.has(name);
+        });
+
+        if (novel.length === 0) {
+          showToast('All lorebook categories already tracked');
+          return;
+        }
+
+        // Show confirmation with checkboxes
+        const msg = `Found ${novel.length} new lorebook categories:\n${novel.map(c => `- ${c.name}`).join('\n')}\n\nImport them as custom categories?`;
+        if (!confirm(msg)) return;
+
+        // Pre-defined colors for auto-assignment
+        const autoColors = ['#ff9900', '#00bcd4', '#e91e63', '#8bc34a', '#9c27b0', '#ff5722', '#607d8b', '#cddc39'];
+        let colorIdx = 0;
+
+        for (const cat of novel) {
+          const name = cat.name;
+          const id = slugifyCategory(name);
+          if (!id || existingIds.has(id)) continue;
+
+          const { singular, plural } = deriveSingularPlural(name);
+
+          await window.sceneVisualizer.loreAddCustomCategory(state.currentStoryId, {
+            id,
+            displayName: plural,
+            singularName: singular,
+            color: autoColors[colorIdx % autoColors.length],
+          });
+          existingIds.add(id);
+          colorIdx++;
+        }
+
+        showToast(`Imported ${novel.length} categories`);
+        await loadCategoryRegistry();
+      } catch (e) {
+        showToast('Detection failed: ' + (e.message || 'Unknown error'));
+      } finally {
+        loreDetectCategoriesBtn.disabled = false;
+        loreDetectCategoriesBtn.textContent = 'Detect from Lorebook';
+      }
+    });
+  }
+
   // Scan action -- dropdown menu
   loreScanBtn.addEventListener('click', () => {
     if (state.loreIsScanning) return;
@@ -1857,18 +2397,13 @@ export function init() {
     }
   });
 
-  // Dropdown items trigger scan with specific type
-  loreScanMenu.querySelectorAll('button[data-scan]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      state.scanMenuOpen = false;
-      loreScanMenu.style.display = 'none';
-      runLoreScan(btn.dataset.scan);
-    });
-  });
+  // Dropdown items are populated dynamically in rebuildCategoryUI()
 
   // Scan progress listener
   window.sceneVisualizer.onLoreScanProgress((progress) => {
     const phaseLabels = {
+      deduplicating: 'Finding duplicates...',
+      'confirming-duplicates': 'Confirming duplicates...',
       identifying: 'Identifying elements...',
       generating: 'Generating entries...',
       'processing-merges': 'Processing merges...',
@@ -1881,6 +2416,8 @@ export function init() {
 
     // Update progress bar
     const phaseProgress = {
+      deduplicating: 5,
+      'confirming-duplicates': 10,
       identifying: 15,
       generating: 40,
       'processing-merges': 55,

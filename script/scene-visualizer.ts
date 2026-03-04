@@ -4,7 +4,7 @@
  * Automatically generates images representing the current story scene.
  * Works in conjunction with the Scene Visualizer Electron app.
  *
- * @version 1.2.0
+ * @version 1.3.0
  * @author ryanrobson
  */
 
@@ -17,12 +17,6 @@ interface ScriptSettings {
   minTextLength: number; // Minimum new text length to trigger generation
   artStyle: string;
   useCharacterLore: boolean; // Pull character descriptions from lorebook
-}
-
-interface SuggestionSettings {
-  autoGenerate: boolean;
-  suggestionStyle: 'brief' | 'detailed' | 'mixed';
-  temperature: number;
 }
 
 interface Suggestion {
@@ -40,7 +34,6 @@ interface ScriptStorage {
   lastProcessedSectionId: number | null;
   currentImage: string;
   lastPrompt: string;
-  suggestionSettings: SuggestionSettings;
   suggestions: Suggestion[];
   suggestionsLoading: boolean;
   suggestionsError: string;
@@ -53,18 +46,11 @@ const DEFAULT_SETTINGS: ScriptSettings = {
   useCharacterLore: true,
 };
 
-const DEFAULT_SUGGESTION_SETTINGS: SuggestionSettings = {
-  autoGenerate: true,
-  suggestionStyle: 'mixed',
-  temperature: 0.6,
-};
-
 const DEFAULT_STORAGE: ScriptStorage = {
   settings: DEFAULT_SETTINGS,
   lastProcessedSectionId: null,
   currentImage: '',
   lastPrompt: '',
-  suggestionSettings: DEFAULT_SUGGESTION_SETTINGS,
   suggestions: [],
   suggestionsLoading: false,
   suggestionsError: '',
@@ -129,6 +115,22 @@ function broadcastStoryContext(): void {
   }
 }
 
+function broadcastStoryText(storyText: string): void {
+  try {
+    let el = document.getElementById('scene-vis-story-text');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'scene-vis-story-text';
+      el.style.display = 'none';
+      document.body.appendChild(el);
+    }
+    el.dataset.text = storyText.slice(-4000); // Match MAX_SUGGESTION_CONTEXT
+    el.dataset.timestamp = String(Date.now());
+  } catch (e) {
+    // DOM not available
+  }
+}
+
 // Store the latest prompt in a global location that Electron can access
 // The prompt is also displayed in the UI panel for visibility
 let currentPromptData: { prompt: string; negativePrompt: string } | null = null;
@@ -156,15 +158,32 @@ function getCurrentPrompt(): { prompt: string; negativePrompt: string } | null {
 // ============================================================================
 
 /**
- * Sends suggestion state to Electron via bridge, falls back to panel-only display
+ * Sends suggestion state to Electron via DOM data attribute relay.
+ * The contextBridge is inaccessible from the script sandbox, so we use
+ * the same DOM relay pattern as broadcastStoryContext().
  */
 function sendSuggestionsUpdate(data: { suggestions?: Suggestion[]; isLoading?: boolean; error?: string }): void {
+  try {
+    let el = document.getElementById('scene-vis-suggestions');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'scene-vis-suggestions';
+      el.style.display = 'none';
+      document.body.appendChild(el);
+    }
+    el.dataset.payload = JSON.stringify(data);
+    el.dataset.timestamp = String(Date.now());
+  } catch (e) {
+    // DOM not available
+  }
+
+  // Keep bridge call as fallback
   try {
     if ((globalThis as any).__sceneVisualizerBridge?.updateSuggestions) {
       (globalThis as any).__sceneVisualizerBridge.updateSuggestions(data);
     }
   } catch (e) {
-    // Bridge not available — not running in Electron webview
+    // Bridge not available
   }
 }
 
@@ -172,8 +191,8 @@ function sendSuggestionsUpdate(data: { suggestions?: Suggestion[]; isLoading?: b
  * Generates 3 story continuation suggestions using GLM-4-6
  */
 async function generateSuggestions(storyText: string): Promise<Suggestion[]> {
-  const storage = await getStorage();
-  const settings = storage.suggestionSettings;
+  // Hardcoded defaults — settings now live in the Electron renderer popover
+  const temperature = 0.6;
 
   // Limit story context to avoid token budget issues
   let contextText = storyText;
@@ -182,22 +201,10 @@ async function generateSuggestions(storyText: string): Promise<Suggestion[]> {
     api.v1.log(`[SceneVis] Suggestion context truncated to ${MAX_SUGGESTION_CONTEXT} chars`);
   }
 
-  // Build style instructions based on setting
-  let styleInstructions = '';
-  switch (settings.suggestionStyle) {
-    case 'brief':
-      styleInstructions = 'Keep all suggestions brief (1-2 sentences max). Focus on action prompts and quick dialogue hooks.';
-      break;
-    case 'detailed':
-      styleInstructions = 'Make suggestions detailed (2-4 sentences each). Include narrative description and emotional context.';
-      break;
-    case 'mixed':
-    default:
-      styleInstructions = `Vary the format naturally based on what fits the story moment:
+  const styleInstructions = `Vary the format naturally based on what fits the story moment:
 - For action scenes: Brief 1-2 sentence prompts
 - For dialogue moments: A character line with brief context
 - For dramatic beats: Longer 2-4 sentence continuations`;
-  }
 
   const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
     {
@@ -233,7 +240,7 @@ Remember: Output ONLY the JSON object, nothing else.`
     const response = await api.v1.generate(messages, {
       model: 'glm-4-6',
       max_tokens: 300,
-      temperature: settings.temperature,
+      temperature,
     });
 
     if (response.choices && response.choices.length > 0) {
@@ -300,10 +307,9 @@ Remember: Output ONLY the JSON object, nothing else.`
 async function processSuggestions(storyText: string): Promise<void> {
   if (isSuggestionsProcessing) return;
 
-  const storage = await getStorage();
-  if (!storage.suggestionSettings.autoGenerate) return;
-
   if (storyText.trim().length < 100) return;
+
+  const storage = await getStorage();
 
   isSuggestionsProcessing = true;
   storage.suggestionsLoading = true;
@@ -338,13 +344,8 @@ async function processSuggestions(storyText: string): Promise<void> {
 }
 
 async function forceRegenerateSuggestions(): Promise<void> {
-  isSuggestionsProcessing = false;
-  const storage = await getStorage();
-  storage.suggestions = [];
-  storage.suggestionsError = '';
-  await saveStorage(storage);
-
-  // Get story text
+  // Suggestion generation now runs through Electron's direct API for parallelism.
+  // Broadcast story text so Electron can pick it up, and direct user to the popover.
   let storyText = '';
   const scanResults = await api.v1.document.scan();
   for (const { section } of scanResults) {
@@ -358,19 +359,8 @@ async function forceRegenerateSuggestions(): Promise<void> {
     return;
   }
 
-  // Temporarily force auto-generate on for this call
-  const origSetting = storage.suggestionSettings.autoGenerate;
-  storage.suggestionSettings.autoGenerate = true;
-  await saveStorage(storage);
-
-  await processSuggestions(storyText);
-
-  // Restore original setting
-  if (!origSetting) {
-    const s = await getStorage();
-    s.suggestionSettings.autoGenerate = origSetting;
-    await saveStorage(s);
-  }
+  broadcastStoryText(storyText);
+  api.v1.ui.toast('Use the Suggestions button in the toolbar to regenerate', { autoClose: 3000 });
 }
 
 async function clearSuggestions(): Promise<void> {
@@ -381,61 +371,6 @@ async function clearSuggestions(): Promise<void> {
   sendSuggestionsUpdate({ suggestions: [] });
   if (panelUpdateFn) await panelUpdateFn();
   api.v1.ui.toast('Suggestions cleared', { autoClose: 2000 });
-}
-
-/**
- * Insert a suggestion into the story.
- * Tries document.append first (directly adds to story), then prefill.set as fallback.
- */
-async function insertSuggestionFallback(suggestion: Suggestion): Promise<void> {
-  // Try document.append — directly adds text to the story
-  try {
-    await api.v1.document.append('\n' + suggestion.text);
-    api.v1.ui.toast('Suggestion appended to story', { autoClose: 2000, type: 'success' });
-    api.v1.log(`[SceneVis] Suggestion appended via document.append: "${suggestion.text.slice(0, 50)}..."`);
-    return;
-  } catch (e) {
-    api.v1.log('[SceneVis] document.append failed, trying prefill.set');
-  }
-
-  // Fallback: prefill.set — places text in the input area for review
-  try {
-    if (api.v1.prefill?.set) {
-      await api.v1.prefill.set(suggestion.text);
-      api.v1.ui.toast('Suggestion added to input — review and submit', { autoClose: 3000, type: 'success' });
-      api.v1.log(`[SceneVis] Suggestion set via prefill: "${suggestion.text.slice(0, 50)}..."`);
-      return;
-    }
-  } catch (e2) {
-    api.v1.log('[SceneVis] prefill.set also failed');
-  }
-
-  api.v1.error('[SceneVis] All insertion methods failed');
-  api.v1.ui.toast('Failed to add suggestion', { autoClose: 4000, type: 'error' });
-}
-
-function getTypeColor(type: string): string {
-  switch (type) {
-    case 'action': return '#6bcb77';
-    case 'dialogue': return '#4d96ff';
-    case 'narrative': return '#ffd93d';
-    default: return '#a0a0a0';
-  }
-}
-
-function getTypeLabel(type: string): string {
-  switch (type) {
-    case 'action': return 'Action';
-    case 'dialogue': return 'Dialogue';
-    case 'narrative': return 'Narrative';
-    default: return 'Mixed';
-  }
-}
-
-async function updateSuggestionSettings(updates: Partial<SuggestionSettings>): Promise<void> {
-  const storage = await getStorage();
-  storage.suggestionSettings = { ...storage.suggestionSettings, ...updates };
-  await saveStorage(storage);
 }
 
 // ============================================================================
@@ -690,9 +625,14 @@ async function processNewContent(): Promise<void> {
       }
     }
 
+    // Broadcast story text for Electron-side suggestion generation
+    broadcastStoryText(storyText);
+
     // Analyze scene and generate prompt
+    const promptStart = Date.now();
     api.v1.log('[SceneVis] Analyzing scene...');
     const { prompt, negativePrompt } = await analyzeSceneForImage(storyText, characterRefs);
+    api.v1.log(`[SceneVis] Image prompt completed in ${Date.now() - promptStart}ms`);
 
     if (!prompt) {
       api.v1.log('[SceneVis] Could not generate prompt');
@@ -709,11 +649,6 @@ async function processNewContent(): Promise<void> {
     if (panelUpdateFn) await panelUpdateFn();
 
     api.v1.ui.toast('Scene prompt ready! Click Generate in Electron toolbar.', { autoClose: 3000 });
-
-    // Generate suggestions independently (don't block on failure)
-    processSuggestions(storyText).catch(e => {
-      api.v1.error('[SceneVis] Suggestion generation failed (non-blocking):', e);
-    });
 
   } catch (e) {
     api.v1.error('[SceneVis] Error processing:', e);
@@ -785,193 +720,6 @@ async function createUIPanel(): Promise<void> {
           await forceGenerate();
         },
         style: { marginBottom: '12px' }
-      })
-    );
-
-    // ---- Story Suggestions Section ----
-    content.push(
-      api.v1.ui.part.text({
-        text: 'Story Suggestions',
-        style: { fontWeight: 'bold', fontSize: '14px', marginTop: '16px', marginBottom: '4px', borderTop: '1px solid #333', paddingTop: '12px' }
-      }),
-      api.v1.ui.part.text({
-        text: 'Click a suggestion to add it to your story',
-        style: { fontSize: '11px', color: '#888', marginBottom: '8px' }
-      })
-    );
-
-    // Suggestions loading state
-    if (storage.suggestionsLoading) {
-      content.push(
-        api.v1.ui.part.container({
-          content: [
-            api.v1.ui.part.text({
-              text: 'Generating suggestions...',
-              style: { color: '#ffd93d', fontStyle: 'italic', textAlign: 'center' }
-            })
-          ],
-          style: { padding: '16px', backgroundColor: '#1a1a1a', borderRadius: '8px', marginBottom: '8px' }
-        })
-      );
-    }
-    // Suggestions error state
-    else if (storage.suggestionsError) {
-      content.push(
-        api.v1.ui.part.container({
-          content: [
-            api.v1.ui.part.text({
-              text: 'Error generating suggestions',
-              style: { color: '#ff6b6b', fontWeight: 'bold', marginBottom: '4px' }
-            }),
-            api.v1.ui.part.text({
-              text: storage.suggestionsError.length > 100 ? storage.suggestionsError.slice(0, 100) + '...' : storage.suggestionsError,
-              style: { color: '#ff8888', fontSize: '11px' }
-            })
-          ],
-          style: { padding: '12px', backgroundColor: '#2a1a1a', borderRadius: '8px', marginBottom: '8px' }
-        })
-      );
-    }
-    // Suggestions display
-    else if (storage.suggestions.length > 0) {
-      for (const suggestion of storage.suggestions) {
-        const typeColor = getTypeColor(suggestion.type);
-        const typeLabel = getTypeLabel(suggestion.type);
-
-        content.push(
-          api.v1.ui.part.container({
-            content: [
-              api.v1.ui.part.text({
-                text: typeLabel,
-                style: { fontSize: '10px', color: typeColor, fontWeight: 'bold', marginBottom: '4px', textTransform: 'uppercase' }
-              }),
-              api.v1.ui.part.button({
-                text: suggestion.text.length > 150 ? suggestion.text.slice(0, 150) + '...' : suggestion.text,
-                callback: async () => {
-                  await insertSuggestionFallback(suggestion);
-                },
-                style: {
-                  width: '100%', textAlign: 'left', backgroundColor: '#2a2a2a', padding: '10px',
-                  borderRadius: '6px', fontSize: '12px', lineHeight: '1.4', whiteSpace: 'pre-wrap',
-                  border: `1px solid ${typeColor}33`
-                }
-              })
-            ],
-            style: { marginBottom: '6px' }
-          })
-        );
-      }
-    }
-    // Suggestions empty state
-    else {
-      content.push(
-        api.v1.ui.part.container({
-          content: [
-            api.v1.ui.part.text({
-              text: 'No suggestions yet',
-              style: { color: '#666', textAlign: 'center' }
-            }),
-            api.v1.ui.part.text({
-              text: 'Suggestions appear after the AI responds',
-              style: { color: '#555', fontSize: '11px', textAlign: 'center', marginTop: '4px' }
-            })
-          ],
-          style: { padding: '16px', backgroundColor: '#1a1a1a', borderRadius: '8px', marginBottom: '8px' }
-        })
-      );
-    }
-
-    // Suggestion action buttons
-    content.push(
-      api.v1.ui.part.row({
-        content: [
-          api.v1.ui.part.button({
-            text: 'Regenerate',
-            callback: async () => { await forceRegenerateSuggestions(); },
-            style: { flex: '1', marginRight: '8px' }
-          }),
-          api.v1.ui.part.button({
-            text: 'Clear',
-            callback: async () => { await clearSuggestions(); },
-            style: { flex: '1', backgroundColor: '#444' }
-          }),
-        ],
-        style: { marginBottom: '12px' }
-      })
-    );
-
-    // Suggestion settings (collapsible)
-    content.push(
-      api.v1.ui.part.collapsibleSection({
-        title: 'Suggestion Settings',
-        initialCollapsed: true,
-        content: [
-          // Auto-generate toggle
-          api.v1.ui.part.row({
-            content: [
-              api.v1.ui.part.text({ text: 'Auto-generate:', style: { flex: '1' } }),
-              api.v1.ui.part.checkboxInput({
-                initialValue: storage.suggestionSettings.autoGenerate,
-                onChange: async (checked: boolean) => {
-                  await updateSuggestionSettings({ autoGenerate: checked });
-                  api.v1.ui.toast(checked ? 'Suggestions auto-generate enabled' : 'Suggestions auto-generate disabled', { autoClose: 2000 });
-                }
-              }),
-            ],
-            style: { marginBottom: '8px' }
-          }),
-          // Style buttons
-          api.v1.ui.part.text({ text: 'Suggestion Style:', style: { marginBottom: '4px', fontSize: '12px' } }),
-          api.v1.ui.part.row({
-            content: [
-              api.v1.ui.part.button({
-                text: 'Brief',
-                callback: async () => {
-                  await updateSuggestionSettings({ suggestionStyle: 'brief' });
-                  api.v1.ui.toast('Style: Brief', { autoClose: 1500 });
-                  if (panelUpdateFn) await panelUpdateFn();
-                },
-                style: { flex: '1', marginRight: '4px', backgroundColor: storage.suggestionSettings.suggestionStyle === 'brief' ? '#4d96ff' : '#333' }
-              }),
-              api.v1.ui.part.button({
-                text: 'Mixed',
-                callback: async () => {
-                  await updateSuggestionSettings({ suggestionStyle: 'mixed' });
-                  api.v1.ui.toast('Style: Mixed', { autoClose: 1500 });
-                  if (panelUpdateFn) await panelUpdateFn();
-                },
-                style: { flex: '1', marginRight: '4px', backgroundColor: storage.suggestionSettings.suggestionStyle === 'mixed' ? '#4d96ff' : '#333' }
-              }),
-              api.v1.ui.part.button({
-                text: 'Detailed',
-                callback: async () => {
-                  await updateSuggestionSettings({ suggestionStyle: 'detailed' });
-                  api.v1.ui.toast('Style: Detailed', { autoClose: 1500 });
-                  if (panelUpdateFn) await panelUpdateFn();
-                },
-                style: { flex: '1', backgroundColor: storage.suggestionSettings.suggestionStyle === 'detailed' ? '#4d96ff' : '#333' }
-              }),
-            ],
-            style: { marginBottom: '12px' }
-          }),
-          // Temperature slider
-          api.v1.ui.part.text({ text: 'Creativity:', style: { marginBottom: '4px', fontSize: '12px' } }),
-          api.v1.ui.part.sliderInput({
-            initialValue: storage.suggestionSettings.temperature,
-            min: 0.3,
-            max: 1.0,
-            step: 0.1,
-            label: `${storage.suggestionSettings.temperature.toFixed(1)} (${storage.suggestionSettings.temperature <= 0.5 ? 'Conservative' : storage.suggestionSettings.temperature >= 0.8 ? 'Creative' : 'Balanced'})`,
-            onChange: async (value: number) => {
-              await updateSuggestionSettings({ temperature: value });
-            },
-            style: { marginBottom: '4px' }
-          }),
-          api.v1.ui.part.text({
-            text: 'Lower = more predictable, Higher = more varied',
-            style: { fontSize: '10px', color: '#666' }
-          }),
-        ]
       })
     );
 
@@ -1183,6 +931,27 @@ async function initialize(): Promise<void> {
         } catch (e2) {
           api.v1.log('[SceneVis] Sidebar insertion via prefill.set also failed: ' + e2);
         }
+        return false;
+      }
+    };
+
+    // Expose regen/clear globals so Electron renderer can invoke via executeJavaScript
+    (globalThis as any).__sceneVisRegenSuggestions = async (): Promise<boolean> => {
+      try {
+        await forceRegenerateSuggestions();
+        return true;
+      } catch (e) {
+        api.v1.error('[SceneVis] Regen suggestions failed:', e);
+        return false;
+      }
+    };
+
+    (globalThis as any).__sceneVisClearSuggestions = async (): Promise<boolean> => {
+      try {
+        await clearSuggestions();
+        return true;
+      } catch (e) {
+        api.v1.error('[SceneVis] Clear suggestions failed:', e);
         return false;
       }
     };

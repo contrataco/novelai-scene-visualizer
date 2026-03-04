@@ -1,53 +1,10 @@
 /**
  * Webview Preload Script
- * Runs inside the NovelAI webview. Exposes a bridge API via contextBridge
- * so the companion script can send prompts directly to the Electron app.
+ * Runs inside the NovelAI webview. Handles auto-login, fetch interceptors,
+ * and suggestion insertion via IPC.
  */
 
-const { contextBridge, ipcRenderer } = require('electron');
-
-contextBridge.exposeInMainWorld('__sceneVisualizerBridge', {
-  // Send prompt to sidebar (no image generation)
-  updatePrompt: (prompt, negativePrompt, storyExcerpt, storyId, storyTitle) => {
-    console.log('[WebviewPreload] Sending prompt update via IPC');
-    ipcRenderer.send('prompt-from-webview', {
-      prompt,
-      negativePrompt: negativePrompt || '',
-      storyExcerpt: storyExcerpt || '',
-      storyId: storyId || null,
-      storyTitle: storyTitle || null,
-    });
-  },
-
-  // Send prompt and request auto-generation
-  requestImage: (prompt, negativePrompt, storyExcerpt, storyId, storyTitle) => {
-    console.log('[WebviewPreload] Requesting image generation via IPC');
-    ipcRenderer.send('prompt-from-webview', {
-      prompt,
-      negativePrompt: negativePrompt || '',
-      storyExcerpt: storyExcerpt || '',
-      autoGenerate: true,
-      storyId: storyId || null,
-      storyTitle: storyTitle || null,
-    });
-  },
-
-  // Send story context update
-  updateStoryContext: (storyId, storyTitle) => {
-    console.log('[WebviewPreload] Sending story context via IPC:', storyId, storyTitle);
-    ipcRenderer.send('story-context-from-webview', { storyId, storyTitle: storyTitle || '' });
-  },
-
-  // Send story suggestions to sidebar
-  updateSuggestions: (data) => {
-    console.log('[WebviewPreload] Sending suggestions update via IPC');
-    ipcRenderer.send('suggestions-from-webview', data);
-  },
-
-  isConnected: () => true,
-});
-
-console.log('[WebviewPreload] Scene Visualizer bridge ready (IPC mode)');
+const { ipcRenderer } = require('electron');
 
 // Auto-login: detect login page and fill credentials
 async function attemptAutoLogin() {
@@ -137,24 +94,85 @@ async function attemptAutoLogin() {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  // Inject TTS V1 fetch interceptor into the page context.
+  // The naiscript runtime hardcodes version:"v2" for TTS requests,
+  // ignoring the user's ttsModel setting. This patches fetch in the
+  // main world to fix that by rewriting v2 → v1 on generate-voice calls.
+  const ttsInterceptScript = document.createElement('script');
+  ttsInterceptScript.textContent = `
+    (function() {
+      const _origFetch = window.fetch;
+      window.fetch = function(url, options) {
+        if (typeof url === 'string' && url.includes('/ai/generate-voice') && options && options.body) {
+          try {
+            const body = JSON.parse(options.body);
+            if (body.version === 'v2') {
+              body.version = 'v1';
+              options = Object.assign({}, options, { body: JSON.stringify(body) });
+              console.log('[TTS-V1-Patch] Rewrote generate-voice version: v2 → v1');
+            }
+          } catch(e) {}
+        }
+        return _origFetch.call(this, url, options);
+      };
+      console.log('[TTS-V1-Patch] Fetch interceptor installed');
+    })();
+  `;
+  document.documentElement.appendChild(ttsInterceptScript);
+  ttsInterceptScript.remove();
+
+  // Inject fetch interceptor for NovelAI API discovery + state capture.
+  // Logs all api.novelai.net calls and captures response structure for
+  // storycontent endpoints to help discover the data format.
+  const apiInterceptScript = document.createElement('script');
+  apiInterceptScript.textContent = `
+    (function() {
+      window.__naiApiLog = [];
+      var _origFetch = window.fetch;
+      window.fetch = function(url, options) {
+        if (typeof url === 'string' && url.includes('api.novelai.net')) {
+          var method = (options && options.method) || 'GET';
+          var shortUrl = url.replace('https://api.novelai.net', '');
+          console.log('[NAI-API]', method, shortUrl);
+          if (options && options.body) {
+            try {
+              var body = JSON.parse(options.body);
+              console.log('[NAI-API] Body keys:', Object.keys(body));
+            } catch(e) {}
+          }
+          return _origFetch.call(this, url, options).then(function(res) {
+            var entry = { method: method, url: shortUrl, status: res.status, time: Date.now() };
+            // Capture response structure for storycontent/stories endpoints
+            if (shortUrl.includes('storycontent') || shortUrl.includes('/user/objects/stories')) {
+              try {
+                var cloned = res.clone();
+                cloned.text().then(function(text) {
+                  entry.bodyLength = text.length;
+                  try {
+                    var json = JSON.parse(text);
+                    entry.bodyKeys = Object.keys(json);
+                    if (json.objects) entry.objectCount = json.objects.length;
+                  } catch(e) {}
+                }).catch(function() {});
+              } catch(e) {}
+            }
+            window.__naiApiLog.push(entry);
+            console.log('[NAI-API] Response:', res.status, shortUrl);
+            return res;
+          });
+        }
+        return _origFetch.call(this, url, options);
+      };
+      console.log('[NAI-API] Fetch interceptor installed');
+    })();
+  `;
+  document.documentElement.appendChild(apiInterceptScript);
+  apiInterceptScript.remove();
+
   // Check if this is the login page
   if (window.location.href.includes('novelai.net')) {
     // Small delay to let the page render
     setTimeout(attemptAutoLogin, 1500);
   }
 
-  // Watch for story context from companion script via DOM data attributes.
-  // The script sandbox can't access contextBridge APIs, so it writes to a
-  // hidden DOM element instead. We observe mutations and relay via IPC.
-  const observer = new MutationObserver(() => {
-    const el = document.getElementById('scene-vis-story-context');
-    if (!el) return;
-    const storyId = el.dataset.storyId;
-    const storyTitle = el.dataset.storyTitle || '';
-    if (storyId) {
-      console.log('[WebviewPreload] Story context from DOM:', storyId, storyTitle);
-      ipcRenderer.send('story-context-from-webview', { storyId, storyTitle });
-    }
-  });
-  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-story-id', 'data-story-title'] });
 });
