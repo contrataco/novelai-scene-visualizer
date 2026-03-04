@@ -1046,10 +1046,14 @@ Rules:
 - Omit template fields that have no information
 - Keep entries concise (under 300 words each)`;
 
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
+  ];
   const result = await retryLLM(async () => {
-    const raw = await generateTextFn(systemPrompt, userPrompt, { max_tokens: 1200, temperature: 0.3 });
+    const raw = await generateTextFn(messages, { max_tokens: 1200, temperature: 0.3 });
     if (!raw) return null;
-    const parsed = recoverJSON(raw);
+    const parsed = recoverJSON(raw.output);
     if (!parsed || !parsed.entries) return null;
     return parsed;
   });
@@ -1200,6 +1204,7 @@ async function scanForRPGData(storyText, rpgState, loreEntries, generateTextFn, 
         role: rpgData.role || (existingChar && existingChar.role) || null,
         isPartyMember: existingChar ? existingChar.isPartyMember : false,
         isNPC: existingChar ? existingChar.isNPC : false,
+        partyRole: existingChar ? existingChar.partyRole : null,
         faction: existingChar ? existingChar.faction : null,
         disposition: existingChar ? existingChar.disposition : null,
         portraitPath: existingChar ? existingChar.portraitPath : null,
