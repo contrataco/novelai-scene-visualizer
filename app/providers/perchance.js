@@ -89,6 +89,10 @@ const MAX_DIMENSION = 768;
 const RATE_LIMIT_COOLDOWN_MS = 20000;
 let lastGenerationTime = 0;
 
+// Refresh key every N generations (Perchance keys expire quickly)
+const KEY_REFRESH_EVERY_N = 2;
+let generationsSinceKeyRefresh = 0;
+
 // Persistent hidden BrowserWindow for making API calls through Cloudflare
 let apiWindow = null;
 let cfReady = false;
@@ -328,76 +332,6 @@ async function ensureKeyVerified(userKey) {
   }
 }
 
-/**
- * Attempt to acquire a fresh userKey by navigating a temp BrowserWindow
- * to the verifyUser endpoint. Full page navigation allows the browser to
- * render Turnstile/CF challenges and produce the userKey in the DOM.
- * Returns the new userKey or null if it fails.
- */
-async function acquireKeyViaVerifyUser(store) {
-  try {
-    const ses = session.fromPartition('persist:perchance-api');
-    ses.setUserAgent(CHROME_UA);
-
-    // Window must be visible — Turnstile detects hidden windows and fails
-    const tempWin = new BrowserWindow({
-      show: true,
-      width: 500,
-      height: 400,
-      title: 'Perchance — Acquiring Key...',
-      webPreferences: {
-        partition: 'persist:perchance-api',
-        nodeIntegration: false,
-        contextIsolation: false,
-        preload: path.join(__dirname, '..', 'perchance-stealth.js'),
-      }
-    });
-
-    try {
-      const url = `https://image-generation.perchance.org/api/verifyUser?thread=0&__cacheBust=${Math.random()}`;
-      console.log('[Perchance] Navigating visible temp window to verifyUser...');
-      await tempWin.loadURL(url, { userAgent: CHROME_UA });
-      await waitForCfClearance(tempWin, 30000);
-
-      // Poll page content for the userKey (page JS needs time to execute)
-      const maxWait = 20000;
-      const start = Date.now();
-      while (Date.now() - start < maxWait) {
-        const content = await tempWin.webContents.executeJavaScript(
-          'document.documentElement.innerHTML'
-        );
-
-        // Match "userKey":"<64-char hex>" pattern (same as Python library)
-        const match = content.match(/"userKey"\s*:\s*"([a-f0-9]{64})"/i);
-        if (match) {
-          const newKey = match[1];
-          store.set('perchanceUserKey', newKey);
-          store.set('perchanceKeyAcquiredAt', Date.now());
-          console.log(`[Perchance] Key acquired via verifyUser navigation: ${newKey.substring(0, 10)}...`);
-          return newKey;
-        }
-
-        if (content.includes('too_many_requests')) {
-          console.log('[Perchance] verifyUser: rate limited');
-          return null;
-        }
-
-        await new Promise(r => setTimeout(r, 1500));
-      }
-
-      console.log('[Perchance] verifyUser navigation timed out — no key found in page');
-      return null;
-    } finally {
-      tempWin.destroy();
-    }
-  } catch (e) {
-    console.log('[Perchance] acquireKeyViaVerifyUser failed:', e.message);
-    return null;
-  }
-}
-
-// Max age before proactive key refresh (45 minutes)
-const KEY_MAX_AGE_MS = 45 * 60 * 1000;
 
 module.exports = {
   id: 'perchance',
@@ -421,16 +355,23 @@ module.exports = {
   async generate(prompt, negativePrompt, store) {
     let userKey = store.get('perchanceUserKey');
     if (!userKey) {
-      throw new Error('No Perchance user key. Please extract one in Settings.');
-    }
-
-    // Proactive key refresh if key is older than 45 minutes
-    const keyAge = Date.now() - (store.get('perchanceKeyAcquiredAt') || 0);
-    if (keyAge > KEY_MAX_AGE_MS) {
-      console.log(`[Perchance] Key is ${Math.round(keyAge / 60000)}min old, attempting proactive refresh...`);
+      console.log('[Perchance] No stored key, attempting extraction...');
       const freshKey = await extractPerchanceKey(store);
       if (freshKey) {
         userKey = freshKey;
+        generationsSinceKeyRefresh = 0;
+      } else {
+        throw new Error('Could not extract Perchance key. Try again or extract manually in Settings.');
+      }
+    }
+
+    // Proactive key refresh every N generations
+    if (generationsSinceKeyRefresh >= KEY_REFRESH_EVERY_N) {
+      console.log(`[Perchance] ${generationsSinceKeyRefresh} generations since last key refresh, extracting fresh key...`);
+      const freshKey = await extractPerchanceKey(store);
+      if (freshKey) {
+        userKey = freshKey;
+        generationsSinceKeyRefresh = 0;
       }
     }
 
@@ -539,6 +480,7 @@ module.exports = {
           const freshKey = await extractPerchanceKey(store);
           if (freshKey) {
             userKey = freshKey;
+            generationsSinceKeyRefresh = 0;
             generateUrl.searchParams.set('userKey', userKey);
             continue;
           }
@@ -553,6 +495,7 @@ module.exports = {
     }
 
     lastGenerationTime = Date.now();
+    generationsSinceKeyRefresh++;
 
     if (!generateData.imageId) {
       throw new Error('No image ID in Perchance response: ' + JSON.stringify(generateData));

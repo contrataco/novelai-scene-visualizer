@@ -1,5 +1,5 @@
-// Venice AI Image Generation Provider
-// API Docs: https://docs.venice.ai/api-reference/image-generation
+// Venice AI Image + Video Generation Provider
+// API Docs: https://docs.venice.ai/api-reference
 
 const MAX_DIMENSION = 1280;
 const API_BASE = 'https://api.venice.ai/api/v1';
@@ -9,7 +9,30 @@ let modelsCache = null;
 let modelsCacheTime = 0;
 let stylesCache = null;
 let stylesCacheTime = 0;
+let videoModelsCache = null;
+let videoModelsCacheTime = 0;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+// Credit balance state (updated after every API response)
+let lastBalance = null;
+
+/**
+ * Capture balance/rate-limit headers from a Venice API response.
+ */
+function captureBalanceHeaders(res) {
+  const usd = res.headers.get('x-venice-balance-usd');
+  const diem = res.headers.get('x-venice-balance-diem');
+  const remaining = res.headers.get('x-ratelimit-remaining-requests');
+  if (usd !== null || diem !== null || remaining !== null) {
+    lastBalance = {
+      usd: usd !== null ? parseFloat(usd) : (lastBalance?.usd ?? null),
+      diem: diem !== null ? parseFloat(diem) : (lastBalance?.diem ?? null),
+      remainingRequests: remaining !== null ? parseInt(remaining, 10) : (lastBalance?.remainingRequests ?? null),
+      timestamp: Date.now(),
+    };
+    console.log(`[Venice] Balance: $${lastBalance.usd?.toFixed(2) ?? '?'}, ${lastBalance.remainingRequests ?? '?'} requests remaining`);
+  }
+}
 
 /**
  * Fetch the list of available image generation models from Venice API.
@@ -24,6 +47,7 @@ async function fetchModels(apiKey) {
     const res = await fetch(`${API_BASE}/models?type=image`, {
       headers: { 'Authorization': `Bearer ${apiKey}` },
     });
+    captureBalanceHeaders(res);
     if (!res.ok) {
       console.log(`[Venice] Failed to fetch models: HTTP ${res.status}`);
       return modelsCache || [];
@@ -55,6 +79,7 @@ async function fetchStyles(apiKey) {
     const res = await fetch(`${API_BASE}/image/styles`, {
       headers: { 'Authorization': `Bearer ${apiKey}` },
     });
+    captureBalanceHeaders(res);
     if (!res.ok) {
       console.log(`[Venice] Failed to fetch styles: HTTP ${res.status}`);
       return stylesCache || [];
@@ -73,6 +98,38 @@ async function fetchStyles(apiKey) {
   }
 }
 
+/**
+ * Fetch the list of available video generation models from Venice API.
+ */
+async function fetchVideoModels(apiKey) {
+  const now = Date.now();
+  if (videoModelsCache && (now - videoModelsCacheTime) < CACHE_TTL_MS) {
+    return videoModelsCache;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/models?type=video`, {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
+    captureBalanceHeaders(res);
+    if (!res.ok) {
+      console.log(`[Venice] Failed to fetch video models: HTTP ${res.status}`);
+      return videoModelsCache || [];
+    }
+    const data = await res.json();
+    videoModelsCache = (data.data || []).map(m => ({
+      id: m.id,
+      name: m.id,
+    }));
+    videoModelsCacheTime = now;
+    console.log(`[Venice] Fetched ${videoModelsCache.length} video models`);
+    return videoModelsCache;
+  } catch (e) {
+    console.log('[Venice] Error fetching video models:', e.message);
+    return videoModelsCache || [];
+  }
+}
+
 module.exports = {
   id: 'venice',
   name: 'Venice AI',
@@ -82,7 +139,6 @@ module.exports = {
   },
 
   getModels() {
-    // Return cached models synchronously; they're fetched when settings open
     return modelsCache || [];
   },
 
@@ -90,22 +146,26 @@ module.exports = {
     return stylesCache || [];
   },
 
-  /**
-   * Fetch models list (called from IPC handler to populate UI dropdown).
-   */
+  getBalance() {
+    return lastBalance;
+  },
+
   async fetchModelsForUI(store) {
     const apiKey = store.get('veniceApiKey');
     if (!apiKey) return [];
     return fetchModels(apiKey);
   },
 
-  /**
-   * Fetch styles list (called from IPC handler to populate UI dropdown).
-   */
   async fetchStylesForUI(store) {
     const apiKey = store.get('veniceApiKey');
     if (!apiKey) return [];
     return fetchStyles(apiKey);
+  },
+
+  async fetchVideoModelsForUI(store) {
+    const apiKey = store.get('veniceApiKey');
+    if (!apiKey) return [];
+    return fetchVideoModels(apiKey);
   },
 
   async generate(prompt, negativePrompt, store) {
@@ -159,6 +219,8 @@ module.exports = {
       body: JSON.stringify(body),
     });
 
+    captureBalanceHeaders(res);
+
     if (!res.ok) {
       const errorText = await res.text();
       throw new Error(`Venice API error ${res.status}: ${errorText.substring(0, 300)}`);
@@ -173,5 +235,186 @@ module.exports = {
     const base64 = data.images[0];
     console.log('[Venice] Image generated successfully');
     return `data:image/png;base64,${base64}`;
-  }
+  },
+
+  // ---------------------------------------------------------------------------
+  // Video generation
+  // ---------------------------------------------------------------------------
+
+  async quoteVideo(prompt, store, opts = {}) {
+    const apiKey = store.get('veniceApiKey');
+    if (!apiKey) throw new Error('No Venice AI API key configured.');
+
+    const model = opts.model || store.get('veniceVideoModel') || '';
+    const duration = opts.duration || store.get('veniceVideoDuration') || '5s';
+    const resolution = opts.resolution || store.get('veniceVideoResolution') || '720p';
+
+    const body = { model, duration, resolution };
+    if (opts.aspect_ratio) body.aspect_ratio = opts.aspect_ratio;
+
+    const res = await fetch(`${API_BASE}/video/quote`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    captureBalanceHeaders(res);
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Venice video quote error ${res.status}: ${errorText.substring(0, 300)}`);
+    }
+    return res.json();
+  },
+
+  async queueVideo(prompt, imageDataUrl, store, opts = {}) {
+    const apiKey = store.get('veniceApiKey');
+    if (!apiKey) throw new Error('No Venice AI API key configured.');
+
+    const model = opts.model || store.get('veniceVideoModel') || '';
+    const duration = opts.duration || store.get('veniceVideoDuration') || '5s';
+    const resolution = opts.resolution || store.get('veniceVideoResolution') || '720p';
+
+    if (!model) throw new Error('No video model selected. Configure one in Settings.');
+
+    const body = {
+      model,
+      prompt,
+      duration,
+      resolution,
+      image_url: imageDataUrl,
+    };
+    if (opts.negative_prompt) body.negative_prompt = opts.negative_prompt;
+    if (opts.aspect_ratio) body.aspect_ratio = opts.aspect_ratio;
+
+    console.log(`[Venice] Queuing video: model=${model}, duration=${duration}, resolution=${resolution}`);
+
+    const res = await fetch(`${API_BASE}/video/queue`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    captureBalanceHeaders(res);
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Venice video queue error ${res.status}: ${errorText.substring(0, 300)}`);
+    }
+
+    const data = await res.json();
+    console.log(`[Venice] Video queued: ${data.queue_id}`);
+    return data;
+  },
+
+  // ---------------------------------------------------------------------------
+  // Text-to-Speech
+  // ---------------------------------------------------------------------------
+
+  getVoices() {
+    return [
+      { id: 'af_heart', name: 'Heart (American Female)' },
+      { id: 'af_alloy', name: 'Alloy (American Female)' },
+      { id: 'af_aoede', name: 'Aoede (American Female)' },
+      { id: 'af_bella', name: 'Bella (American Female)' },
+      { id: 'af_jessica', name: 'Jessica (American Female)' },
+      { id: 'af_kore', name: 'Kore (American Female)' },
+      { id: 'af_nicole', name: 'Nicole (American Female)' },
+      { id: 'af_nova', name: 'Nova (American Female)' },
+      { id: 'af_river', name: 'River (American Female)' },
+      { id: 'af_sarah', name: 'Sarah (American Female)' },
+      { id: 'af_sky', name: 'Sky (American Female)' },
+      { id: 'am_adam', name: 'Adam (American Male)' },
+      { id: 'am_echo', name: 'Echo (American Male)' },
+      { id: 'am_eric', name: 'Eric (American Male)' },
+      { id: 'am_fenrir', name: 'Fenrir (American Male)' },
+      { id: 'am_liam', name: 'Liam (American Male)' },
+      { id: 'am_michael', name: 'Michael (American Male)' },
+      { id: 'am_onyx', name: 'Onyx (American Male)' },
+      { id: 'am_puck', name: 'Puck (American Male)' },
+      { id: 'am_santa', name: 'Santa (American Male)' },
+      { id: 'bf_alice', name: 'Alice (British Female)' },
+      { id: 'bf_emma', name: 'Emma (British Female)' },
+      { id: 'bf_isabella', name: 'Isabella (British Female)' },
+      { id: 'bf_lily', name: 'Lily (British Female)' },
+      { id: 'bm_daniel', name: 'Daniel (British Male)' },
+      { id: 'bm_fable', name: 'Fable (British Male)' },
+      { id: 'bm_george', name: 'George (British Male)' },
+      { id: 'bm_lewis', name: 'Lewis (British Male)' },
+    ];
+  },
+
+  async generateSpeech(text, voice, store) {
+    const apiKey = store.get('veniceApiKey');
+    if (!apiKey) throw new Error('No Venice AI API key configured.');
+
+    const speed = store.get('ttsSpeed') || 1.0;
+
+    const res = await fetch(`${API_BASE}/audio/speech`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        input: text,
+        model: 'tts-kokoro',
+        voice,
+        response_format: 'mp3',
+        speed,
+      }),
+    });
+
+    captureBalanceHeaders(res);
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Venice TTS error ${res.status}: ${errorText.substring(0, 300)}`);
+    }
+
+    const buf = Buffer.from(await res.arrayBuffer());
+    return { audioData: `data:audio/mp3;base64,${buf.toString('base64')}`, format: 'mp3' };
+  },
+
+  async retrieveVideo(queueId, model, store) {
+    const apiKey = store.get('veniceApiKey');
+    if (!apiKey) throw new Error('No Venice AI API key configured.');
+
+    const res = await fetch(`${API_BASE}/video/retrieve`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ queue_id: queueId, model }),
+    });
+    captureBalanceHeaders(res);
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Venice video retrieve error ${res.status}: ${errorText.substring(0, 300)}`);
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('video/')) {
+      // Completed — return video as base64 data URL
+      const buffer = Buffer.from(await res.arrayBuffer());
+      const base64 = buffer.toString('base64');
+      const mimeType = contentType.split(';')[0].trim();
+      console.log(`[Venice] Video retrieved successfully (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
+      return { status: 'completed', videoDataUrl: `data:${mimeType};base64,${base64}` };
+    }
+
+    // Still processing
+    const data = await res.json();
+    return {
+      status: 'processing',
+      averageExecutionTime: data.average_execution_time,
+      executionDuration: data.execution_duration,
+    };
+  },
 };

@@ -1,5 +1,6 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const { LITRPG_STATE_DEFAULTS } = require('./litrpg-tracker');
 
 const LOG_PREFIX = '[DB]';
 
@@ -56,6 +57,29 @@ function createTables() {
       updated_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS tts_state (
+      story_id TEXT PRIMARY KEY REFERENCES stories(id),
+      data TEXT NOT NULL DEFAULT '{}',
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS media_items (
+      id TEXT PRIMARY KEY,
+      story_id TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'image',
+      filename TEXT NOT NULL,
+      thumb_filename TEXT,
+      prompt TEXT DEFAULT '',
+      negative_prompt TEXT DEFAULT '',
+      provider TEXT DEFAULT '',
+      model TEXT DEFAULT '',
+      width INTEGER DEFAULT 0,
+      height INTEGER DEFAULT 0,
+      file_size INTEGER DEFAULT 0,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_media_story ON media_items(story_id, type, created_at);
+
     CREATE TABLE IF NOT EXISTS migrations (
       version INTEGER PRIMARY KEY,
       applied_at INTEGER NOT NULL
@@ -87,7 +111,7 @@ function listStories() {
 
 // --- Generic per-story CRUD ---
 
-const VALID_TABLES = new Set(['scene_state', 'lore_state', 'lore_comprehension', 'memory_state', 'litrpg_state']);
+const VALID_TABLES = new Set(['scene_state', 'lore_state', 'lore_comprehension', 'memory_state', 'litrpg_state', 'tts_state']);
 
 function getData(table, storyId) {
   if (!VALID_TABLES.has(table)) throw new Error(`Invalid table: ${table}`);
@@ -147,13 +171,6 @@ function setMemoryState(storyId, data) {
   setData('memory_state', storyId, data);
 }
 
-const LITRPG_STATE_DEFAULTS = {
-  enabled: false, detected: null, systemType: 'generic', dismissedDetection: false,
-  characters: {}, quests: {}, party: { members: [], lastUpdated: null },
-  pendingUpdates: [], lastProcessedLength: 0, lastScanAt: null, charsSinceLastScan: 0,
-  autoScan: true, autoSync: false, globalInventory: [], globalCurrency: {},
-};
-
 function getLitrpgState(storyId) {
   const data = getData('litrpg_state', storyId);
   if (!data) return null;
@@ -162,6 +179,18 @@ function getLitrpgState(storyId) {
 
 function setLitrpgState(storyId, data) {
   setData('litrpg_state', storyId, data);
+}
+
+const TTS_STATE_DEFAULTS = { characterVoices: {} };
+
+function getTtsState(storyId) {
+  const data = getData('tts_state', storyId);
+  if (!data) return { ...TTS_STATE_DEFAULTS };
+  return { ...TTS_STATE_DEFAULTS, ...data };
+}
+
+function setTtsState(storyId, data) {
+  setData('tts_state', storyId, data);
 }
 
 // --- Bulk load (used on story switch) ---
@@ -173,6 +202,7 @@ function loadAllStoryData(storyId) {
     comprehension: getComprehension(storyId),
     memoryState: getMemoryState(storyId),
     litrpgState: getLitrpgState(storyId),
+    ttsState: getTtsState(storyId),
   };
 }
 
@@ -227,5 +257,6 @@ module.exports = {
   getComprehension, setComprehension,
   getMemoryState, setMemoryState,
   getLitrpgState, setLitrpgState, LITRPG_STATE_DEFAULTS,
+  getTtsState, setTtsState, TTS_STATE_DEFAULTS,
   loadAllStoryData, migrateFromStore,
 };

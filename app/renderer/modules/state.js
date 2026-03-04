@@ -52,6 +52,7 @@ export const state = {
   loreState: null,
   loreSettings: null,
   loreIsScanning: false,
+  categoryRegistry: null,
   loreEnrichResult: null, // {entry, updatedText, originalText, displayName}
   loreProxyReady: false,
   loreLastStoryLength: 0,
@@ -76,4 +77,7 @@ export const state = {
   litrpgState: null,
   litrpgEnabled: false,
   litrpgScanning: false,
+
+  // TTS state (per-story character voice map)
+  ttsState: null,
 };

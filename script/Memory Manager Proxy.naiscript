@@ -1,0 +1,210 @@
+/*---
+compatibilityVersion: naiscript-1.0
+id: a3b4c5d6-7e8f-9a0b-1c2d-3e4f5a6b7c8d
+name: Memory Manager Proxy
+createdAt: 1772092800000
+updatedAt: 1772092800000
+version: 2.4.0
+author: Contrataco
+description: Proxy for Scene Visualizer Electron memory manager integration
+memoryLimit: 16
+---*/
+
+// ============================================================================
+// MEMORY MANAGER PROXY v2.0.0
+//
+// Communication strategy: Script API UI contextPanel as bridge.
+// The QuickJS sandbox has NO document/window access. But api.v1.ui panels
+// render into the real page DOM. We use contextPanel (instead of scriptPanel)
+// because contextPanel may render during story editing, not just when the
+// Script Manager section is open. The Electron renderer finds these in the
+// DOM and communicates through them.
+// ============================================================================
+
+const LOG_PREFIX = '[MemoryProxy]';
+
+let responsePayload = '';
+let panelUpdateFn: (() => Promise<void>) | null = null;
+
+// ============================================================================
+// MEMORY OPERATIONS
+// ============================================================================
+
+async function proxyGetMemory(): Promise<string> {
+  try {
+    const memory = await api.v1.memory.get();
+    return memory || '';
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Error reading memory:`, e);
+    return '';
+  }
+}
+
+async function proxySetMemory(text: string): Promise<boolean> {
+  try {
+    await api.v1.memory.set(text);
+    api.v1.log(`${LOG_PREFIX} Memory updated (${text.length} chars)`);
+    return true;
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Error setting memory:`, e);
+    return false;
+  }
+}
+
+async function proxyGetStoryText(): Promise<string> {
+  try {
+    const scanResults = await api.v1.document.scan();
+    let text = '';
+    for (const { section } of scanResults) {
+      if (section.text) text += section.text + '\n';
+    }
+    return text;
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Error reading story:`, e);
+    return '';
+  }
+}
+
+async function proxyCountTokens(text: string): Promise<number> {
+  try {
+    const tokens = await api.v1.tokenizer.encode(text, 'glm-4-6');
+    return tokens.length;
+  } catch (e) {
+    return Math.ceil(text.length / 4);
+  }
+}
+
+// ============================================================================
+// REQUEST HANDLER
+// ============================================================================
+
+async function handleRequest(req: { id: string; method: string; args: any[] }): Promise<any> {
+  switch (req.method) {
+    case 'getMemory': return proxyGetMemory();
+    case 'setMemory': return proxySetMemory(req.args[0]);
+    case 'getStoryText': return proxyGetStoryText();
+    case 'countTokens': return proxyCountTokens(req.args[0]);
+    case 'ping': return { ok: true, ts: Date.now() };
+    default:
+      return { __error: 'Unknown method: ' + req.method };
+  }
+}
+
+// ============================================================================
+// UI PANEL — serves as communication bridge to Electron
+// ============================================================================
+
+async function processCommand(text: string): Promise<void> {
+  if (!text || !text.startsWith('{')) return;
+  try {
+    const req = JSON.parse(text);
+    if (!req.id || !req.method) return;
+    api.v1.log(`${LOG_PREFIX} << ${req.method} (${req.id})`);
+    const result = await handleRequest(req);
+    responsePayload = JSON.stringify({ id: req.id, data: result });
+    api.v1.log(`${LOG_PREFIX} >> ${req.method} done`);
+    if (panelUpdateFn) await panelUpdateFn();
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Command error:`, e);
+  }
+}
+
+async function buildPanel(): Promise<any> {
+  return api.v1.ui.part.column({
+    content: [
+      api.v1.ui.part.text({
+        text: 'Memory Manager Proxy v2.0 — Electron Bridge',
+      }),
+      api.v1.ui.part.textInput({
+        initialValue: '',
+        placeholder: '__MEMORY_PROXY_CMD__',
+        onChange: (text: string) => { processCommand(text); },
+      }),
+      api.v1.ui.part.text({
+        text: '__MEMORY_PROXY_RES__' + responsePayload + '__MEMORY_PROXY_END__',
+      }),
+    ],
+  });
+}
+
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
+(async () => {
+  api.v1.log(`${LOG_PREFIX} v2.0.0 initializing...`);
+
+  let hasPermissions = false;
+  try {
+    hasPermissions = await api.v1.permissions.request(['storyEdit']);
+  } catch (e) {
+    api.v1.error(`${LOG_PREFIX} Permission request error:`, e);
+  }
+
+  if (!hasPermissions) {
+    api.v1.error(`${LOG_PREFIX} Permissions denied`);
+    api.v1.ui.toast('Memory Manager Proxy: permissions denied', { autoClose: 5000, type: 'error' });
+    return;
+  }
+
+  // === API Surface Discovery ===
+  api.v1.log(`${LOG_PREFIX} api.v1.ui keys: ${Object.keys(api.v1.ui)}`);
+  api.v1.log(`${LOG_PREFIX} api.v1.ui.extension type: ${typeof api.v1.ui.extension}`);
+  if (api.v1.ui.extension) {
+    api.v1.log(`${LOG_PREFIX} api.v1.ui.extension keys: ${Object.keys(api.v1.ui.extension)}`);
+  }
+  if (api.v1.ui.part) {
+    api.v1.log(`${LOG_PREFIX} api.v1.ui.part keys: ${Object.keys(api.v1.ui.part)}`);
+  }
+  api.v1.log(`${LOG_PREFIX} api.v1.ui.register type: ${typeof api.v1.ui.register}`);
+  api.v1.log(`${LOG_PREFIX} api.v1.ui.update type: ${typeof api.v1.ui.update}`);
+
+  const panelTypes = ['sidebarPanel', 'scriptPanel'];
+  let registeredType = '';
+
+  const updatePanel = async () => {
+    if (!registeredType) return;
+    try {
+      const panel = await buildPanel();
+      await api.v1.ui.update([
+        (api.v1.ui.extension as any)[registeredType]({
+          id: 'memoryProxyPanel',
+          name: 'Memory Proxy',
+          content: [panel],
+        }),
+      ]);
+    } catch (e) {
+      api.v1.error(`${LOG_PREFIX} Panel update error:`, e);
+    }
+  };
+  panelUpdateFn = updatePanel;
+
+  for (const panelType of panelTypes) {
+    try {
+      const initialPanel = await buildPanel();
+      await api.v1.ui.register([
+        (api.v1.ui.extension as any)[panelType]({
+          id: 'memoryProxyPanel',
+          name: 'Memory Proxy',
+          content: [initialPanel],
+        }),
+      ]);
+      registeredType = panelType;
+      api.v1.log(`${LOG_PREFIX} Registered as ${panelType}`);
+      break;
+    } catch (e) {
+      api.v1.log(`${LOG_PREFIX} ${panelType} registration failed, trying next...`);
+    }
+  }
+
+  (globalThis as any).__memoryProxy = {
+    isReady: () => true,
+    getMemory: proxyGetMemory,
+    setMemory: proxySetMemory,
+    getStoryText: proxyGetStoryText,
+    countTokens: proxyCountTokens,
+  };
+
+  api.v1.ui.toast('Memory Manager Proxy loaded', { autoClose: 3000, type: 'success' });
+  api.v1.log(`${LOG_PREFIX} Ready (UI panel bridge active)`);
+})();

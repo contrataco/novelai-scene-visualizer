@@ -6,7 +6,7 @@
  * Data stored as structured JSON in SQLite, synced to lorebook text entries.
  */
 
-const { fuzzyNameScore, recoverJSON } = require('./lore-creator');
+const { fuzzyNameScore, recoverJSON, extractField, parseMetadata, setMetadata, getTemplateForType, METADATA_VERSION } = require('./lore-creator');
 
 const LOG_PREFIX = '[LitRPG]';
 
@@ -30,6 +30,13 @@ const VALID_ABILITY_TYPES = new Set(['active', 'passive']);
 const VALID_STATUS_TYPES = new Set(['buff', 'debuff', 'condition']);
 const VALID_RARITY = new Set(['common', 'uncommon', 'rare', 'epic', 'legendary', 'unknown']);
 const VALID_DISPOSITIONS = new Set(['friendly', 'neutral', 'hostile', 'unknown']);
+const VALID_ROLES = new Set(['party-member', 'companion', 'summon', 'pet', 'mount', 'npc']);
+const PARTY_SIDE_ROLES = new Set(['party-member', 'companion', 'summon', 'pet', 'mount']);
+
+// R4: Lore Element Extraction
+const MAX_R4_ELEMENTS = 10;
+const R4_RARE_RARITIES = new Set(['rare', 'epic', 'legendary']);
+const VALID_R4_CATEGORIES = new Set(['concept', 'item', 'faction']);
 
 const LITRPG_STATE_DEFAULTS = {
   enabled: false,
@@ -137,6 +144,23 @@ function fuzzyMatchQuest(title, quests, threshold = 0.8) {
 function fuzzyMatchInSet(name, nameSet, threshold = 0.7) {
   for (const existing of nameSet) {
     if (fuzzyNameScore(name, existing) >= threshold) return true;
+  }
+  return false;
+}
+
+/**
+ * Check if a character (by name or aliases) appears in the given text.
+ * For multi-word names, checks individual words (≥3 chars) to catch partial matches.
+ */
+function characterAppearsInText(name, aliases, text) {
+  const textLower = text.toLowerCase();
+  const names = [name, ...(aliases || [])];
+  for (const n of names) {
+    if (!n) continue;
+    const words = n.split(/\s+/).filter(w => w.length >= 3);
+    for (const word of words) {
+      if (textLower.includes(word.toLowerCase())) return true;
+    }
   }
   return false;
 }
@@ -321,7 +345,15 @@ function validateClassification(data) {
   const cleaned = { partyMembers: [], npcs: [] };
 
   if (Array.isArray(data.partyMembers)) {
-    cleaned.partyMembers = data.partyMembers.filter(n => typeof n === 'string');
+    for (const pm of data.partyMembers) {
+      // Support both old format (string) and new format (object with name+role)
+      if (typeof pm === 'string') {
+        cleaned.partyMembers.push({ name: pm, role: 'party-member' });
+      } else if (pm && pm.name) {
+        const role = PARTY_SIDE_ROLES.has(pm.role) ? pm.role : 'party-member';
+        cleaned.partyMembers.push({ name: String(pm.name), role });
+      }
+    }
   }
 
   if (Array.isArray(data.npcs)) {
@@ -331,7 +363,7 @@ function validateClassification(data) {
         name: String(npc.name),
         faction: typeof npc.faction === 'string' ? npc.faction : null,
         disposition: VALID_DISPOSITIONS.has(npc.disposition) ? npc.disposition : 'unknown',
-        role: typeof npc.role === 'string' ? npc.role : null,
+        npcRole: typeof npc.npcRole === 'string' ? npc.npcRole : (typeof npc.role === 'string' && npc.role !== 'npc' ? npc.role : null),
         relationship: typeof npc.relationship === 'string' ? npc.relationship : null,
         isRealPerson: typeof npc.isRealPerson === 'boolean' ? npc.isRealPerson : true,
       });
@@ -343,21 +375,54 @@ function validateClassification(data) {
 
 // --- Retry Logic (Phase 1C) ---
 
-async function retryLLM(fn, maxRetries = 1) {
+function categorizeError(err) {
+  const msg = (err.message || '').toLowerCase();
+  const status = err.status || err.statusCode;
+  if (status === 429 || msg.includes('429') || msg.includes('rate limit') || msg.includes('too many requests')) {
+    return 'rate-limit';
+  }
+  if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('econnreset') || msg.includes('socket hang up')) {
+    return 'timeout';
+  }
+  return 'other';
+}
+
+async function retryLLM(fn, { maxRetries = 1, passName = 'unknown' } = {}) {
   let lastError = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const result = await fn();
       if (result !== null && result !== undefined) return result;
-      console.log(`${LOG_PREFIX} retryLLM: null result on attempt ${attempt + 1}`);
+      console.log(`${LOG_PREFIX} retryLLM(${passName}): null result on attempt ${attempt + 1}`);
     } catch (err) {
       lastError = err;
-      console.warn(`${LOG_PREFIX} retryLLM: error on attempt ${attempt + 1}: ${err.message}`);
+      const category = categorizeError(err);
+      console.warn(`${LOG_PREFIX} retryLLM(${passName}): ${category} on attempt ${attempt + 1}: ${err.message}`);
+      if (category === 'rate-limit' && attempt < maxRetries) {
+        const backoff = INTER_CALL_DELAY * 3 * (attempt + 1);
+        console.log(`${LOG_PREFIX} retryLLM(${passName}): rate-limit backoff ${backoff}ms`);
+        await delay(backoff);
+        continue;
+      }
     }
     if (attempt < maxRetries) await delay(INTER_CALL_DELAY);
   }
-  if (lastError) console.error(`${LOG_PREFIX} retryLLM: all attempts failed:`, lastError.message);
+  if (lastError) console.error(`${LOG_PREFIX} retryLLM(${passName}): all attempts failed:`, lastError.message);
   return null;
+}
+
+// --- Hybrid LLM Fallback ---
+
+async function callWithFallback(providers, index, asyncFn) {
+  const primary = providers[index % providers.length];
+  try {
+    return await asyncFn(primary);
+  } catch (err) {
+    if (providers.length <= 1) throw err;
+    const fallback = providers[(index + 1) % providers.length];
+    console.warn(`${LOG_PREFIX} callWithFallback: primary failed (${err.message}), trying fallback`);
+    return await asyncFn(fallback);
+  }
 }
 
 // --- Regex Pre-Extraction Pipeline (Phase 1D) ---
@@ -635,12 +700,25 @@ Find new quests AND status changes to known quests. Output:
   });
 }
 
-async function classifyPartyAndNPCs(characterNames, storyText, generateTextFn, comprehensionContext, systemType) {
-  if (characterNames.length === 0) return { partyMembers: [], npcs: [] };
+async function classifyPartyAndNPCs(characters, storyText, generateTextFn, comprehensionContext, systemType) {
+  if (characters.length === 0) return { partyMembers: [], npcs: [] };
 
   const typeConfig = SYSTEM_TYPE_PROMPTS[systemType] || SYSTEM_TYPE_PROMPTS.generic;
-  const recentText = storyText.slice(-3000);
+  const recentText = storyText.slice(-6000);
   const contextBlock = comprehensionContext ? `${comprehensionContext}\n` : '';
+
+  // Build enriched character context lines with class/level/role metadata
+  const charLines = characters.map(c => {
+    const parts = [c.name];
+    if (c.level) parts.push(`Lv.${c.level}`);
+    if (c.class) parts.push(c.class);
+    if (c.role) parts.push(c.role); // combat role (tank/healer/dps)
+    const detail = parts.length > 1 ? ` (${parts.slice(1).join(', ')})` : '';
+    const anchor = c.currentRole
+      ? `, currently: ${c.currentRole}`
+      : ', no prior classification';
+    return `- ${c.name}${detail}${anchor}`;
+  }).join('\n');
 
   const messages = [
     {
@@ -649,19 +727,31 @@ async function classifyPartyAndNPCs(characterNames, storyText, generateTextFn, c
     },
     {
       role: 'user',
-      content: `Classify these characters based on the story context. "Party members" travel with or fight alongside the protagonist. "NPCs" are other characters encountered in the story world.
-${contextBlock}CHARACTERS: ${characterNames.join(', ')}
+      content: `Classify these characters based on the story context.
+
+Roles:
+- "party-member": travels with or fights alongside the protagonist
+- "companion": allied NPC who regularly accompanies the party
+- "summon": summoned creature or spirit bound to a party member
+- "pet": tamed animal or creature following a party member
+- "mount": rideable creature belonging to the party
+- "npc": other characters in the story world
+
+Characters with an existing classification should KEEP it unless the story EXPLICITLY contradicts it (e.g. a companion betrays the party, or an NPC joins).
+
+${contextBlock}CHARACTERS:
+${charLines}
 
 RECENT STORY TEXT:
 ${recentText}
 
-Output:
-{"partyMembers":["Name1","Name2"],"npcs":[{"name":"Name3","faction":"faction name or null","disposition":"friendly|neutral|hostile|unknown","role":"mentor|rival|shopkeeper|quest_giver|boss|ally|other|null","relationship":"relationship description or null","isRealPerson":true/false}]}`
+Output JSON — every character MUST appear in exactly one list:
+{"partyMembers":[{"name":"Name1","role":"party-member|companion|summon|pet|mount"}],"npcs":[{"name":"Name3","role":"npc","faction":"faction name or null","disposition":"friendly|neutral|hostile|unknown","npcRole":"mentor|rival|shopkeeper|quest_giver|boss|ally|other|null","relationship":"relationship description or null","isRealPerson":true/false}]}`
     }
   ];
 
   return retryLLM(async () => {
-    const result = await generateTextFn(messages, { max_tokens: 300, temperature: 0.3 });
+    const result = await generateTextFn(messages, { max_tokens: 500, temperature: 0.3 });
     const parsed = recoverJSON(result.output);
     return validateClassification(parsed);
   });
@@ -829,6 +919,184 @@ function describeChanges(before, after) {
 }
 
 // ============================================================================
+// R4: LORE ELEMENT EXTRACTION
+// ============================================================================
+
+/**
+ * Collect non-character RPG elements from state, deduplicated against existing lorebook.
+ * Returns { elements: [], skipped: number }
+ */
+function collectR4Elements(rpgState, loreEntries) {
+  const elements = [];
+  const seen = new Set(); // track names we've already collected
+  const loreNames = (loreEntries || []).map(e => (e.displayName || '').toLowerCase());
+
+  function isDuplicateOfLore(name) {
+    const lower = name.toLowerCase();
+    return loreNames.some(ln => fuzzyNameScore(lower, ln) >= 0.7);
+  }
+
+  function addElement(name, sourceType, category, context) {
+    const key = `${sourceType}:${name.toLowerCase()}`;
+    if (seen.has(key)) return;
+    if (isDuplicateOfLore(name)) return;
+    seen.add(key);
+    elements.push({ name, sourceType, category, context });
+  }
+
+  const chars = Object.values(rpgState.characters || {});
+
+  // Classes/subclasses → concept
+  for (const c of chars) {
+    if (c.class) addElement(c.class, 'class', 'concept', { characterName: c.name, level: c.level, subclass: c.subclass });
+    if (c.subclass) addElement(c.subclass, 'class', 'concept', { characterName: c.name, level: c.level, parentClass: c.class });
+  }
+
+  // Rare+ equipment → item
+  for (const c of chars) {
+    for (const eq of (c.equipment || [])) {
+      if (eq.name && eq.rarity && R4_RARE_RARITIES.has(eq.rarity)) {
+        addElement(eq.name, 'equipment', 'item', { owner: c.name, slot: eq.slot, rarity: eq.rarity, description: eq.description });
+      }
+    }
+  }
+
+  // NPC factions → faction (grouped by faction name with member list)
+  const factionMembers = {};
+  for (const c of chars) {
+    if (c.isNPC && c.faction) {
+      if (!factionMembers[c.faction]) factionMembers[c.faction] = [];
+      factionMembers[c.faction].push(c.name);
+    }
+  }
+  for (const [factionName, members] of Object.entries(factionMembers)) {
+    addElement(factionName, 'faction', 'faction', { members });
+  }
+
+  // Quests → concept
+  for (const q of Object.values(rpgState.quests || {})) {
+    if (q.title) addElement(q.title, 'quest', 'concept', { description: q.description, type: q.type, giver: q.giver, status: q.status });
+  }
+
+  // Priority cap: equipment first, then factions, classes, quests
+  const priorityOrder = ['equipment', 'faction', 'class', 'quest'];
+  elements.sort((a, b) => priorityOrder.indexOf(a.sourceType) - priorityOrder.indexOf(b.sourceType));
+
+  const skipped = Math.max(0, elements.length - MAX_R4_ELEMENTS);
+  return { elements: elements.slice(0, MAX_R4_ELEMENTS), skipped };
+}
+
+/**
+ * Format a single R4 element into a description line for the LLM prompt.
+ */
+function formatR4ElementContext(element, index) {
+  const { name, sourceType, context } = element;
+  switch (sourceType) {
+    case 'class':
+      return `${index + 1}. [CLASS] "${name}" — used by ${context.characterName}${context.level ? ` (Lv.${context.level})` : ''}${context.parentClass ? `, subclass of ${context.parentClass}` : ''}${context.subclass ? `, with subclass ${context.subclass}` : ''}`;
+    case 'equipment':
+      return `${index + 1}. [ITEM] "${name}" (${context.rarity} ${context.slot || 'equipment'}) — owned by ${context.owner}${context.description ? `: ${context.description}` : ''}`;
+    case 'faction':
+      return `${index + 1}. [FACTION] "${name}" — known members: ${context.members.join(', ')}`;
+    case 'quest':
+      return `${index + 1}. [QUEST] "${name}"${context.type ? ` (${context.type})` : ''}${context.giver ? ` from ${context.giver}` : ''}${context.description ? `: ${context.description}` : ''}`;
+    default:
+      return `${index + 1}. "${name}"`;
+  }
+}
+
+/**
+ * Generate lorebook entries for R4 elements via a single batched LLM call.
+ */
+async function generateLoreElementEntries(elements, storyText, generateTextFn, comprehensionContext, systemType) {
+  if (!elements || elements.length === 0) return [];
+
+  const typeConfig = SYSTEM_TYPE_PROMPTS[systemType] || SYSTEM_TYPE_PROMPTS.generic;
+  const elementDescriptions = elements.map((el, i) => formatR4ElementContext(el, i)).join('\n');
+
+  // Build template instructions for each category present
+  const categoriesPresent = [...new Set(elements.map(e => e.category))];
+  const templateInstructions = categoriesPresent.map(cat => {
+    const tmpl = getTemplateForType(cat);
+    return tmpl ? `\nFor ${cat.toUpperCase()} entries, use this structured format:\n${tmpl}` : '';
+  }).join('\n');
+
+  const recentStory = storyText.slice(-2000);
+
+  const systemPrompt = `You are a lorebook entry writer for a ${typeConfig.contextHint || 'fantasy RPG'} story. Create concise lorebook entries for RPG game elements discovered in the story. Each entry should be factual and based only on what is known from the story context. Use second person ("you") for protagonist references where applicable.`;
+
+  const userPrompt = `Create lorebook entries for these RPG elements found in the story:
+
+${elementDescriptions}
+
+${templateInstructions}
+
+Recent story context:
+---
+${recentStory}
+---
+${comprehensionContext ? `\nStory comprehension:\n${comprehensionContext}\n` : ''}
+Return a JSON object with this exact schema:
+{"entries":[{"name":"element name","category":"concept|item|faction","keys":["key1","key2"],"text":"entry text using the template format above","confidence":1-5}]}
+
+Rules:
+- Only include information confirmed by the story — no speculation
+- Keys should be aliases or related terms for lorebook matching
+- Confidence: 1=uncertain, 5=well-established in story
+- Omit template fields that have no information
+- Keep entries concise (under 300 words each)`;
+
+  const result = await retryLLM(async () => {
+    const raw = await generateTextFn(systemPrompt, userPrompt, { max_tokens: 1200, temperature: 0.3 });
+    if (!raw) return null;
+    const parsed = recoverJSON(raw);
+    if (!parsed || !parsed.entries) return null;
+    return parsed;
+  });
+
+  if (!result || !result.entries) return [];
+  return validateR4Entries(result.entries, elements);
+}
+
+/**
+ * Validate and format R4 LLM output into pending lore entry objects.
+ */
+function validateR4Entries(entries, sourceElements) {
+  if (!Array.isArray(entries)) return [];
+  const today = new Date().toISOString().split('T')[0];
+  const validated = [];
+
+  for (const entry of entries) {
+    if (!entry.name || !entry.text || !entry.category) continue;
+    if (!VALID_R4_CATEGORIES.has(entry.category)) continue;
+    if (entry.confidence != null && entry.confidence < CONFIDENCE_GATE) continue;
+
+    // Determine source tag from matching source element
+    const sourceEl = sourceElements.find(se => fuzzyNameScore(se.name, entry.name) >= 0.7);
+    const sourceTag = sourceEl ? `litrpg-r4-${sourceEl.sourceType}` : 'litrpg-r4';
+
+    const text = setMetadata(entry.text, {
+      type: entry.category,
+      version: METADATA_VERSION,
+      updated: today,
+      source: sourceTag,
+    });
+
+    validated.push({
+      id: `lore_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      category: entry.category,
+      displayName: entry.name,
+      keys: Array.isArray(entry.keys) ? entry.keys : [entry.name.toLowerCase()],
+      text,
+      confidence: entry.confidence || 3,
+      createdAt: Date.now(),
+    });
+  }
+
+  return validated;
+}
+
+// ============================================================================
 // SCAN ORCHESTRATOR (Phase 2 — Incremental Scanning)
 // ============================================================================
 
@@ -875,14 +1143,27 @@ async function scanForRPGData(storyText, rpgState, loreEntries, generateTextFn, 
 
   for (let i = 0; i < characterEntries.length; i++) {
     const entry = characterEntries[i];
-    const provider = providers[i % providers.length];
+
+    // Gate: skip lorebook entries for characters not in story text (new chars only)
+    const existingId = fuzzyMatchCharacter(entry.displayName, state.characters);
+    if (!existingId) {
+      const entryNames = [entry.displayName, ...(entry.keys || [])];
+      if (!characterAppearsInText(entry.displayName, entryNames, scanText)) {
+        console.log(`${LOG_PREFIX} R1: Skipping "${entry.displayName}" — not found in story text`);
+        if (onProgress) onProgress({ phase: 'characters', current: i + 1, total: characterEntries.length });
+        continue;
+      }
+    }
 
     if (i > 0 && (providers.length === 1 || i % providers.length === 0)) {
       await delay(INTER_CALL_DELAY);
     }
 
-    const rpgData = await extractCharacterRPG(
-      entry.displayName, entry.text, scanText, provider, comprehensionContext, systemType, preExtractedHints
+    const rpgData = await retryLLM(
+      () => callWithFallback(providers, i, (p) =>
+        extractCharacterRPG(entry.displayName, entry.text, scanText, p, comprehensionContext, systemType, preExtractedHints)
+      ),
+      { maxRetries: 2, passName: `R1-character-${entry.displayName}` }
     );
 
     if (rpgData) {
@@ -962,7 +1243,12 @@ async function scanForRPGData(storyText, rpgState, loreEntries, generateTextFn, 
   console.log(`${LOG_PREFIX} R2: Extracting quests`);
 
   const existingQuests = Object.values(state.quests);
-  const questResult = await extractQuests(scanText, existingQuests, generateTextFn, comprehensionContext, systemType, preExtractedHints);
+  const questResult = await retryLLM(
+    () => callWithFallback(providers, 0, (p) =>
+      extractQuests(scanText, existingQuests, p, comprehensionContext, systemType, preExtractedHints)
+    ),
+    { maxRetries: 1, passName: 'R2-quests' }
+  );
 
   if (questResult) {
     // Add new quests
@@ -1036,37 +1322,107 @@ async function scanForRPGData(storyText, rpgState, loreEntries, generateTextFn, 
   await delay(INTER_CALL_DELAY);
 
   // -------------------------------------------------------------------
-  // Pass R3: Party & NPC Classification
+  // Pass R3: Party & NPC Classification (with metadata anchoring)
   // -------------------------------------------------------------------
-  const allCharNames = Object.values(state.characters).map(c => c.name);
-  if (allCharNames.length > 0) {
-    if (onProgress) onProgress({ phase: 'party', current: 0, total: 1 });
-    console.log(`${LOG_PREFIX} R3: Classifying party/NPCs for ${allCharNames.length} characters`);
+  const allChars = Object.values(state.characters);
+  // Only classify characters who appear in the story text
+  const charsInStory = allChars.filter(c => {
+    const names = [c.name, c.loreEntryName, ...(c.aliases || [])];
+    return characterAppearsInText(c.name, names, scanText);
+  });
+  const charsNotInStory = allChars.filter(c => {
+    const names = [c.name, c.loreEntryName, ...(c.aliases || [])];
+    return !characterAppearsInText(c.name, names, scanText);
+  });
 
-    const classification = await classifyPartyAndNPCs(allCharNames, scanText, generateTextFn, comprehensionContext, systemType);
+  if (charsNotInStory.length > 0) {
+    console.log(`${LOG_PREFIX} R3: Skipping ${charsNotInStory.length} characters not in story text: ${charsNotInStory.map(c => c.name).join(', ')}`);
+  }
+
+  if (charsInStory.length > 0) {
+    if (onProgress) onProgress({ phase: 'party', current: 0, total: 1 });
+    console.log(`${LOG_PREFIX} R3: Classifying party/NPCs for ${charsInStory.length} characters (${charsNotInStory.length} skipped)`);
+
+    // Build enriched character data with @role metadata from lorebook entries
+    const enrichedChars = charsInStory.map(c => {
+      // Find matching lorebook entry and read @role metadata
+      let currentRole = null;
+      if (c.loreEntryName) {
+        const loreEntry = loreEntries.find(e =>
+          e.displayName === c.loreEntryName || fuzzyNameScore(e.displayName, c.name) >= 0.8
+        );
+        if (loreEntry) {
+          const meta = parseMetadata(loreEntry.text);
+          if (meta.role && VALID_ROLES.has(meta.role)) currentRole = meta.role;
+        }
+      }
+      // Fall back to existing state flags
+      if (!currentRole) {
+        if (c.isPartyMember) currentRole = c.partyRole || 'party-member';
+        else if (c.isNPC) currentRole = 'npc';
+      }
+      return {
+        name: c.name,
+        level: c.level,
+        class: c.class,
+        role: c.role, // combat role (tank/healer/dps)
+        currentRole,  // @role metadata or state-derived
+      };
+    });
+
+    const classification = await retryLLM(
+      () => callWithFallback(providers, 0, (p) =>
+        classifyPartyAndNPCs(enrichedChars, scanText, p, comprehensionContext, systemType)
+      ),
+      { maxRetries: 1, passName: 'R3-classification' }
+    );
+
+    // Track which characters were classified (for default-to-NPC)
+    const classifiedIds = new Set();
+    const roleUpdates = []; // {charName, loreEntryName, role} — for lorebook sync
 
     if (classification) {
-      // Fuzzy match party members (Phase 1A)
-      for (const partyName of (classification.partyMembers || [])) {
-        const matchId = fuzzyMatchCharacter(partyName, state.characters);
+      // Apply party-side classifications
+      for (const pm of (classification.partyMembers || [])) {
+        const matchId = fuzzyMatchCharacter(pm.name, state.characters);
         if (matchId) {
-          state.characters[matchId].isPartyMember = true;
-          state.characters[matchId].isNPC = false;
+          classifiedIds.add(matchId);
+          const char = state.characters[matchId];
+          char.isPartyMember = true;
+          char.isNPC = false;
+          char.partyRole = pm.role || 'party-member';
+          if (char.loreEntryName) {
+            roleUpdates.push({ charName: char.name, loreEntryName: char.loreEntryName, role: char.partyRole });
+          }
         }
       }
 
-      // Fuzzy match NPCs (Phase 1A)
+      // Apply NPC classifications
       for (const npc of (classification.npcs || [])) {
         if (!npc.name) continue;
         const matchId = fuzzyMatchCharacter(npc.name, state.characters);
         if (matchId) {
+          classifiedIds.add(matchId);
           const char = state.characters[matchId];
           char.isPartyMember = false;
           char.isNPC = true;
+          char.partyRole = null;
           char.faction = npc.faction || char.faction;
           char.disposition = npc.disposition || char.disposition;
-          if (npc.role) char.npcRole = npc.role;
+          if (npc.npcRole) char.npcRole = npc.npcRole;
           if (npc.relationship) char.npcRelationship = npc.relationship;
+          if (char.loreEntryName) {
+            roleUpdates.push({ charName: char.name, loreEntryName: char.loreEntryName, role: 'npc' });
+          }
+        }
+      }
+
+      // Default unclassified characters to NPC (not invisible)
+      for (const [id, char] of Object.entries(state.characters)) {
+        if (!classifiedIds.has(id) && !char.isPartyMember && !char.isNPC) {
+          char.isNPC = true;
+          char.partyRole = null;
+          console.log(`${LOG_PREFIX} R3: Defaulting unclassified "${char.name}" to NPC`);
         }
       }
 
@@ -1077,7 +1433,31 @@ async function scanForRPGData(storyText, rpgState, loreEntries, generateTextFn, 
       state.party.lastUpdated = Date.now();
     }
 
+    // Store role updates for renderer to apply to lorebook
+    state._pendingRoleUpdates = roleUpdates;
+
     if (onProgress) onProgress({ phase: 'party', current: 1, total: 1 });
+  }
+
+  // -------------------------------------------------------------------
+  // Pass R4: Lore Element Extraction
+  // -------------------------------------------------------------------
+  const r4Collection = collectR4Elements(state, loreEntries);
+  if (r4Collection.elements.length > 0) {
+    if (onProgress) onProgress({ phase: 'lore-elements', current: 0, total: r4Collection.elements.length });
+    console.log(`${LOG_PREFIX} R4: Generating lore entries for ${r4Collection.elements.length} RPG elements${r4Collection.skipped > 0 ? ` (${r4Collection.skipped} skipped)` : ''}`);
+    await delay(INTER_CALL_DELAY);
+    const r4Entries = await generateLoreElementEntries(
+      r4Collection.elements, scanText, generateTextFn, comprehensionContext, systemType
+    );
+    if (r4Entries && r4Entries.length > 0) {
+      state._pendingLoreEntries = r4Entries;
+      console.log(`${LOG_PREFIX} R4: Generated ${r4Entries.length} lore entries`);
+    }
+    if (onProgress) onProgress({ phase: 'lore-elements', current: r4Collection.elements.length, total: r4Collection.elements.length });
+  }
+  if (r4Collection.skipped > 0) {
+    state._r4Skipped = r4Collection.skipped;
   }
 
   state.lastProcessedLength = storyText.length;
@@ -1316,6 +1696,255 @@ function buildLitRPGCharacterText(entryText, rpgData) {
   return text;
 }
 
+/**
+ * Parse RPG data from a structured lorebook entry text.
+ * Inverse of buildLitRPGCharacterText() — reads fields back into an RPG data object.
+ */
+function parseRPGFromEntryText(text) {
+  if (!text) return null;
+
+  // Strip metadata header if present
+  const { rest } = parseMetadata(text);
+  const src = rest || text;
+
+  const rpg = {};
+
+  // Class / Subclass
+  const classField = extractField(src, 'Class');
+  if (classField) {
+    const parts = classField.split('/').map(s => s.trim());
+    rpg.class = parts[0] || null;
+    rpg.subclass = parts[1] || null;
+  }
+
+  // Level
+  const levelField = extractField(src, 'Level');
+  if (levelField) {
+    const num = parseInt(levelField, 10);
+    if (!isNaN(num)) rpg.level = num;
+  }
+
+  // Race
+  const raceField = extractField(src, 'Race');
+  if (raceField) rpg.race = raceField;
+
+  // XP
+  const xpField = extractField(src, 'XP');
+  if (xpField) {
+    const xpParts = xpField.split('/').map(s => s.trim());
+    rpg.xp = {};
+    const cur = parseInt(xpParts[0], 10);
+    if (!isNaN(cur)) rpg.xp.current = cur;
+    if (xpParts[1]) {
+      const needed = parseInt(xpParts[1], 10);
+      if (!isNaN(needed)) rpg.xp.needed = needed;
+    }
+  }
+
+  // Cultivation
+  const cultField = extractField(src, 'Cultivation Realm');
+  if (cultField) {
+    const cultParts = cultField.split(',').map(s => s.trim());
+    rpg.cultivationRealm = cultParts[0] || null;
+    rpg.cultivationStage = cultParts[1] || null;
+  }
+
+  // Stats — "STR 18, DEX 14, CON 16"
+  const statsField = extractField(src, 'Stats');
+  if (statsField) {
+    rpg.stats = {};
+    const statPairs = statsField.split(',').map(s => s.trim());
+    for (const pair of statPairs) {
+      const m = pair.match(/^(\S+)\s+(\d+)/);
+      if (m) rpg.stats[m[1]] = { value: parseInt(m[2], 10) };
+    }
+  }
+
+  // Abilities — multi-line "- Name: description [cost]"
+  const abilitiesField = extractField(src, 'Abilities');
+  if (abilitiesField) {
+    rpg.abilities = [];
+    const lines = abilitiesField.split('\n');
+    for (const line of lines) {
+      const m = line.match(/^-\s*([^:]+):\s*(.+?)(?:\s*\[([^\]]+)\])?$/);
+      if (m) {
+        rpg.abilities.push({ name: m[1].trim(), description: m[2].trim(), cost: m[3] || null });
+      }
+    }
+  }
+
+  // Equipment — multi-line "- Name: slot (rarity), description"
+  const equipField = extractField(src, 'Equipment');
+  if (equipField) {
+    rpg.equipment = [];
+    const lines = equipField.split('\n');
+    for (const line of lines) {
+      const m = line.match(/^-\s*([^:]+):\s*(\S+?)(?:\s*\(([^)]+)\))?,\s*(.+)$/);
+      if (m) {
+        rpg.equipment.push({
+          name: m[1].trim(), slot: m[2].trim(),
+          rarity: m[3] ? m[3].trim() : 'unknown', description: m[4].trim(),
+        });
+      }
+    }
+  }
+
+  // Inventory — multi-line "- Name: Nx (type)"
+  const invField = extractField(src, 'Inventory');
+  if (invField) {
+    rpg.inventory = [];
+    const lines = invField.split('\n');
+    for (const line of lines) {
+      const m = line.match(/^-\s*([^:]+):\s*(\d+)x\s*\(([^)]+)\)/);
+      if (m) {
+        rpg.inventory.push({ name: m[1].trim(), quantity: parseInt(m[2], 10), type: m[3].trim() });
+      }
+    }
+  }
+
+  // Currency — "100 gold, 50 silver"
+  const currField = extractField(src, 'Currency');
+  if (currField) {
+    rpg.currency = {};
+    const pairs = currField.split(',').map(s => s.trim());
+    for (const pair of pairs) {
+      const m = pair.match(/^(\d+)\s+(.+)$/);
+      if (m) rpg.currency[m[2].trim()] = parseInt(m[1], 10);
+    }
+  }
+
+  // Status Effects — "Poisoned (debuff) [5 turns], Blessed (buff)"
+  const statusField = extractField(src, 'Status Effects');
+  if (statusField) {
+    rpg.statusEffects = [];
+    const effects = statusField.split(',').map(s => s.trim());
+    for (const eff of effects) {
+      const m = eff.match(/^([^(]+)\s*\(([^)]+)\)(?:\s*\[([^\]]+)\])?/);
+      if (m) {
+        rpg.statusEffects.push({ name: m[1].trim(), type: m[2].trim(), duration: m[3] || null });
+      }
+    }
+  }
+
+  return rpg;
+}
+
+/**
+ * Reverse sync: parse RPG data from a lorebook entry and match to existing RPG character.
+ * Returns { changed, isNew, parsed, charId, changes }.
+ */
+function reverseSyncCharacter(entryText, entryName, rpgState) {
+  const parsed = parseRPGFromEntryText(entryText);
+  if (!parsed || Object.keys(parsed).length === 0) {
+    return { changed: false, isNew: false, parsed: null, charId: null, changes: [] };
+  }
+
+  const characters = rpgState.characters || {};
+  const charId = fuzzyMatchCharacter(entryName, characters);
+
+  if (!charId) {
+    return { changed: false, isNew: true, parsed, charId: null, changes: [] };
+  }
+
+  const existing = characters[charId];
+  const changes = [];
+
+  // Compare top-level scalar fields
+  for (const field of ['class', 'subclass', 'level', 'race', 'cultivationRealm', 'cultivationStage']) {
+    if (parsed[field] != null && parsed[field] !== existing[field]) {
+      changes.push({ field, before: existing[field], after: parsed[field] });
+    }
+  }
+
+  // Compare XP
+  if (parsed.xp) {
+    if (parsed.xp.current != null && (!existing.xp || parsed.xp.current !== existing.xp.current)) {
+      changes.push({ field: 'xp.current', before: existing.xp?.current, after: parsed.xp.current });
+    }
+    if (parsed.xp.needed != null && (!existing.xp || parsed.xp.needed !== existing.xp.needed)) {
+      changes.push({ field: 'xp.needed', before: existing.xp?.needed, after: parsed.xp.needed });
+    }
+  }
+
+  // Compare stats
+  if (parsed.stats) {
+    for (const [stat, val] of Object.entries(parsed.stats)) {
+      const existingVal = existing.stats?.[stat]?.value;
+      if (val.value !== existingVal) {
+        changes.push({ field: `stats.${stat}`, before: existingVal, after: val.value });
+      }
+    }
+  }
+
+  // Compare currency
+  if (parsed.currency) {
+    for (const [unit, amount] of Object.entries(parsed.currency)) {
+      const existingAmount = existing.currency?.[unit];
+      if (amount !== existingAmount) {
+        changes.push({ field: `currency.${unit}`, before: existingAmount, after: amount });
+      }
+    }
+  }
+
+  // Compare abilities
+  if (parsed.abilities && parsed.abilities.length > 0) {
+    for (const ability of parsed.abilities) {
+      const match = (existing.abilities || []).find(a => fuzzyNameScore(a.name, ability.name) >= 0.8);
+      if (!match) {
+        changes.push({ field: 'abilities', before: null, after: ability.name, detail: 'new ability' });
+      } else {
+        if (ability.level != null && ability.level !== match.level) {
+          changes.push({ field: `ability.${ability.name}.level`, before: match.level, after: ability.level });
+        }
+        if (ability.description && ability.description !== match.description) {
+          changes.push({ field: `ability.${ability.name}.description`, before: match.description, after: ability.description });
+        }
+      }
+    }
+  }
+
+  // Compare equipment
+  if (parsed.equipment && parsed.equipment.length > 0) {
+    for (const equip of parsed.equipment) {
+      const match = (existing.equipment || []).find(e => fuzzyNameScore(e.name, equip.name) >= 0.8);
+      if (!match) {
+        changes.push({ field: 'equipment', before: null, after: equip.name, detail: `new ${equip.slot || 'equipment'}` });
+      } else {
+        if (equip.slot && equip.slot !== match.slot) {
+          changes.push({ field: `equipment.${equip.name}.slot`, before: match.slot, after: equip.slot });
+        }
+        if (equip.rarity && equip.rarity !== 'unknown' && equip.rarity !== match.rarity) {
+          changes.push({ field: `equipment.${equip.name}.rarity`, before: match.rarity, after: equip.rarity });
+        }
+      }
+    }
+  }
+
+  // Compare inventory
+  if (parsed.inventory && parsed.inventory.length > 0) {
+    for (const item of parsed.inventory) {
+      const match = (existing.inventory || []).find(i => fuzzyNameScore(i.name, item.name) >= 0.8);
+      if (!match) {
+        changes.push({ field: 'inventory', before: null, after: `${item.name} x${item.quantity || 1}`, detail: 'new item' });
+      } else if (item.quantity != null && item.quantity !== match.quantity) {
+        changes.push({ field: `inventory.${item.name}.quantity`, before: match.quantity, after: item.quantity });
+      }
+    }
+  }
+
+  // Compare status effects
+  if (parsed.statusEffects && parsed.statusEffects.length > 0) {
+    for (const effect of parsed.statusEffects) {
+      const match = (existing.statusEffects || []).find(s => fuzzyNameScore(s.name, effect.name) >= 0.8);
+      if (!match) {
+        changes.push({ field: 'statusEffects', before: null, after: effect.name, detail: `new ${effect.type || 'effect'}` });
+      }
+    }
+  }
+
+  return { changed: changes.length > 0, isNew: false, parsed, charId, changes };
+}
+
 async function generatePortraitPrompt(characterEntryText, rpgData, generateTextFn) {
   const equipmentStr = (rpgData.equipment || []).map(e => e.name).join(', ') || 'none specified';
   const messages = [
@@ -1349,6 +1978,21 @@ Write a single-line prompt for a fantasy character portrait. Focus on: race, phy
 }
 
 // ============================================================================
+// ROLE METADATA SYNC
+// ============================================================================
+
+/**
+ * Build updated entry text with @role metadata set.
+ * Returns null if the role is already correct (no update needed).
+ */
+function buildRoleUpdatePayload(entryText, newRole) {
+  if (!VALID_ROLES.has(newRole)) return null;
+  const meta = parseMetadata(entryText);
+  if (meta.role === newRole) return null; // already correct
+  return setMetadata(entryText, { role: newRole });
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -1363,6 +2007,8 @@ module.exports = {
   extractCharacterRPG,
   extractQuests,
   classifyPartyAndNPCs,
+  collectR4Elements,
+  generateLoreElementEntries,
 
   // Pending update actions
   acceptPendingUpdate,
@@ -1375,6 +2021,9 @@ module.exports = {
   spliceField,
   spliceSection,
   generatePortraitPrompt,
+  parseRPGFromEntryText,
+  reverseSyncCharacter,
+  buildRoleUpdatePayload,
 
   // Helpers
   fuzzyMatchCharacter,
@@ -1390,5 +2039,7 @@ module.exports = {
   LITRPG_CHARACTER_TEMPLATE,
   DETECTION_THRESHOLD,
   VALID_EQUIPMENT_SLOTS,
+  VALID_ROLES,
+  PARTY_SIDE_ROLES,
   SYSTEM_TYPE_PROMPTS,
 };

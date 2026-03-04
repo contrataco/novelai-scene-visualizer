@@ -19,7 +19,32 @@ const MAX_ELEMENTS_PER_SCAN = 8;
 const INTER_CALL_DELAY = 1000;
 const MAX_UPDATES_PER_SCAN = 3;
 
-const ALL_CATEGORIES = ['character', 'location', 'item', 'faction', 'concept'];
+const BUILTIN_CATEGORIES = [
+  { id: 'character', displayName: 'Characters', singularName: 'Character', color: '#4d96ff', isBuiltin: true, template: 'character' },
+  { id: 'location',  displayName: 'Locations',  singularName: 'Location',  color: '#6bcb77', isBuiltin: true, template: 'location' },
+  { id: 'item',      displayName: 'Items',       singularName: 'Item',      color: '#ffd93d', isBuiltin: true, template: 'item' },
+  { id: 'faction',   displayName: 'Factions',    singularName: 'Faction',   color: '#ff6b6b', isBuiltin: true, template: 'faction' },
+  { id: 'concept',   displayName: 'Concepts',    singularName: 'Concept',   color: '#a855f7', isBuiltin: true, template: 'concept' },
+];
+
+function buildCategoryRegistry(customCategories) {
+  const registry = BUILTIN_CATEGORIES.map(c => ({ ...c }));
+  if (Array.isArray(customCategories)) {
+    for (const cc of customCategories) {
+      if (cc && cc.id && !registry.find(r => r.id === cc.id)) {
+        registry.push({ ...cc, isBuiltin: false, template: cc.template || null });
+      }
+    }
+  }
+  return registry;
+}
+
+function getCategoryIds(registry) {
+  return registry.map(c => c.id);
+}
+
+// Backward-compat: flat array of builtin IDs
+const ALL_CATEGORIES = BUILTIN_CATEGORIES.map(c => c.id);
 
 const DEFAULT_SETTINGS = {
   autoScan: true,
@@ -96,19 +121,28 @@ function delay(ms) {
  * Pass 1: Identify lore-worthy elements in story text.
  */
 async function identifyLoreElements(storyText, settings, existingEntries, generateTextFn, comprehensionContext) {
-  const enabledCats = ALL_CATEGORIES.filter(c => settings.enabledCategories[c]);
+  const registry = buildCategoryRegistry(settings.customCategories);
+  const allCatIds = getCategoryIds(registry);
+  const enabledCats = allCatIds.filter(c => settings.enabledCategories[c]);
   if (enabledCats.length === 0) return [];
 
-  // Build rich existing entries block with names, aliases, and description snippets
+  // Build existing entries block — rich detail for top 20, compact names for the rest
   let existingLine = '';
   if (existingEntries.length > 0) {
-    const entryLines = existingEntries.slice(0, 20).map(e => {
+    const richLines = existingEntries.slice(0, 20).map(e => {
       const aliases = (e.keys || []).filter(k => k.toLowerCase() !== (e.displayName || '').toLowerCase());
       const aliasStr = aliases.length > 0 ? ` (aliases: ${aliases.slice(0, 3).join(', ')})` : '';
       const snippet = (e.text || '').slice(0, 80).replace(/\n/g, ' ');
       return `- ${e.displayName}${aliasStr}: ${snippet}`;
     });
-    existingLine = `\nEXISTING ENTRIES:\n${entryLines.join('\n')}\n`;
+    // Compact format for entries 21+ — just name and aliases, no text snippet
+    const compactLines = existingEntries.slice(20).map(e => {
+      const aliases = (e.keys || []).filter(k => k.toLowerCase() !== (e.displayName || '').toLowerCase());
+      const aliasStr = aliases.length > 0 ? ` (aliases: ${aliases.slice(0, 3).join(', ')})` : '';
+      return `- ${e.displayName}${aliasStr}`;
+    });
+    const allLines = [...richLines, ...compactLines];
+    existingLine = `\nEXISTING ENTRIES (${existingEntries.length} total):\n${allLines.join('\n')}\n`;
   }
 
   const contextOverhead = (comprehensionContext ? comprehensionContext.length : 0) + existingLine.length;
@@ -193,13 +227,15 @@ async function generateLoreEntryFromElement(name, category, storyText, settings,
     contextText = storyText.slice(-contextBudget);
   }
 
-  const isCharacter = category === 'character';
+  const template = getTemplateForType(category);
 
   let detailInstructions = '';
-  if (isCharacter) {
-    detailInstructions = `Use this structured format for the text field:\n${CHARACTER_TEMPLATE}\n\nOnly include information that is explicitly stated or clearly shown in the text. Leave fields blank if the story doesn't provide that information. Do NOT speculate or infer.
-- Relationships/Family: use "- Name: detail" format, one per line
-Omit fields that have no explicit support in the story. Keep each field concise.`;
+  if (template) {
+    detailInstructions = `Use this structured format for the text field:\n${template}\n\nOnly include information that is explicitly stated or clearly shown in the text. Leave fields blank if the story doesn't provide that information. Do NOT speculate or infer.`;
+    if (category === 'character') {
+      detailInstructions += '\n- Relationships/Family: use "- Name: detail" format, one per line';
+    }
+    detailInstructions += '\nOmit fields that have no explicit support in the story. Keep each field concise.';
   } else {
     switch (settings.detailLevel) {
       case 'brief':
@@ -226,7 +262,7 @@ Omit fields that have no explicit support in the story. Keep each field concise.
     ? `${comprehensionContext}\n`
     : '';
 
-  const maxTokens = isCharacter ? 600 : 200;
+  const maxTokens = template ? 600 : 200;
 
   const messages = [
     {
@@ -265,12 +301,15 @@ Output ONLY this JSON format, no other text:
       const keys = Array.isArray(parsed.keys)
         ? parsed.keys.filter(k => typeof k === 'string').slice(0, 6)
         : [name];
+      const rawText = typeof parsed.text === 'string' ? parsed.text : '';
+      const today = new Date().toISOString().slice(0, 10);
+      const entryText = setMetadata(rawText, { type: category, version: METADATA_VERSION, updated: today, source: 'lore-scan' });
       return {
         id: generateId(),
         category,
         displayName: parsed.displayName || name,
         keys,
-        text: typeof parsed.text === 'string' ? parsed.text : '',
+        text: entryText,
         confidence,
         createdAt: Date.now(),
       };
@@ -473,6 +512,109 @@ Family:
 Background: [History and backstory]
 Additional notes: [Any other relevant details]`;
 
+const LOCATION_TEMPLATE = `Name: [Full name of the location]
+Region: [Broader region or area it belongs to]
+Type: [City/town/forest/cave/realm/etc.]
+Climate/Terrain: [Weather and geographical features]
+Description: [Physical description and atmosphere]
+Notable Features: [Landmarks, architecture, unique elements]
+History: [Key historical events or founding]
+Inhabitants: [Who lives here; races, factions, notable residents]
+Dangers: [Threats, monsters, environmental hazards]
+Connected Locations: [Nearby or linked places]
+Additional notes: [Any other relevant details]`;
+
+const ITEM_TEMPLATE = `Name: [Full name of the item]
+Type: [Weapon/armor/potion/artifact/tool/etc.]
+Rarity: [Common/uncommon/rare/epic/legendary/unique]
+Description: [Physical appearance and notable features]
+Properties: [Magical or special properties, bonuses, effects]
+Origin: [Where it was made, by whom, how it was created]
+Current Owner: [Who currently possesses it]
+Lore: [History, legends, or significance]
+Additional notes: [Any other relevant details]`;
+
+const FACTION_TEMPLATE = `Name: [Full name of the faction/organization]
+Type: [Guild/order/clan/government/cult/etc.]
+Alignment: [General moral alignment or philosophy]
+Description: [Purpose, reputation, and key traits]
+Leadership: [Leader(s) and command structure]
+Territory: [Area of influence or headquarters]
+Members: [Notable members or typical membership]
+Relations: [Allies, enemies, and diplomatic standing]
+Goals: [Current objectives and long-term aims]
+History: [Founding, key events, evolution]
+Additional notes: [Any other relevant details]`;
+
+const CONCEPT_TEMPLATE = `Name: [Name of the concept/system/magic]
+Type: [Magic system/political system/religion/technology/etc.]
+Description: [How it works, core principles]
+Rules: [Governing laws, limitations, costs]
+Practitioners: [Who uses it, requirements to use it]
+Significance: [Impact on the world and story]
+Related Concepts: [Connected systems, prerequisite knowledge]
+Additional notes: [Any other relevant details]`;
+
+/**
+ * Map of type -> template string.
+ */
+const TEMPLATES = {
+  character: CHARACTER_TEMPLATE,
+  location: LOCATION_TEMPLATE,
+  item: ITEM_TEMPLATE,
+  faction: FACTION_TEMPLATE,
+  concept: CONCEPT_TEMPLATE,
+};
+
+function getTemplateForType(type) {
+  return TEMPLATES[type] || null;
+}
+
+/**
+ * Per-type regex arrays for format detection.
+ */
+const TEMPLATE_FIELDS = {
+  character: [
+    /^Name:/m, /^Age:/m, /^Relationships:/m, /^Physical Appearance:/m,
+    /^Sexuality:/m, /^Gender:/m, /^Description:/m, /^Self-Image:/m,
+    /^Motivations\/Goals:/m, /^Secrets:/m, /^Background:/m, /^Family:/m,
+    /^Additional notes:/m,
+  ],
+  location: [
+    /^Name:/m, /^Region:/m, /^Type:/m, /^Climate\/Terrain:/m,
+    /^Description:/m, /^Notable Features:/m, /^History:/m,
+    /^Inhabitants:/m, /^Dangers:/m, /^Connected Locations:/m,
+    /^Additional notes:/m,
+  ],
+  item: [
+    /^Name:/m, /^Type:/m, /^Rarity:/m, /^Description:/m,
+    /^Properties:/m, /^Origin:/m, /^Current Owner:/m,
+    /^Lore:/m, /^Additional notes:/m,
+  ],
+  faction: [
+    /^Name:/m, /^Type:/m, /^Alignment:/m, /^Description:/m,
+    /^Leadership:/m, /^Territory:/m, /^Members:/m,
+    /^Relations:/m, /^Goals:/m, /^History:/m, /^Additional notes:/m,
+  ],
+  concept: [
+    /^Name:/m, /^Type:/m, /^Description:/m, /^Rules:/m,
+    /^Practitioners:/m, /^Significance:/m, /^Related Concepts:/m,
+    /^Additional notes:/m,
+  ],
+};
+
+/**
+ * Check if an entry follows the structured template format for a given type.
+ * Returns true if the entry has at least 3 of the template field labels.
+ */
+function isEntryFormatted(text, type) {
+  if (!text) return true; // empty entries don't need reformatting
+  const fields = TEMPLATE_FIELDS[type];
+  if (!fields) return true; // no template = no reformatting needed
+  const matches = fields.filter(re => re.test(text)).length;
+  return matches >= 3;
+}
+
 /**
  * Heuristic: does this lorebook entry look like it describes a character?
  * Checks for person-describing patterns in text content (appearance, personality,
@@ -539,20 +681,32 @@ async function generateEntriesFromPrompt(prompt, category, storyText, settings, 
     ? `\nEXISTING ENTRIES: ${existingEntryNames.slice(0, 30).join(', ')}\n`
     : '';
 
+  const registry = buildCategoryRegistry(settings.customCategories);
+  const allCatIds = getCategoryIds(registry);
+
   const categoryInstruction = category === 'auto'
-    ? `Determine the most appropriate category for each entry from: ${ALL_CATEGORIES.join(', ')}.`
+    ? `Determine the most appropriate category for each entry from: ${allCatIds.join(', ')}.`
     : `All entries should use category "${category}".`;
 
-  const useCharacterTemplate = category === 'character' || category === 'auto';
-
-  const characterInstructions = useCharacterTemplate
-    ? `\nFor CHARACTER entries, use this structured format for the text field:\n${CHARACTER_TEMPLATE}\n\nOmit fields that have no information. Keep each field concise.`
-    : '';
+  // Build template instructions for all types that have templates
+  let templateInstructions = '';
+  if (category !== 'auto') {
+    const tmpl = getTemplateForType(category);
+    if (tmpl) {
+      templateInstructions = `\nFor ${category.toUpperCase()} entries, use this structured format for the text field:\n${tmpl}\n\nOmit fields that have no information. Keep each field concise.`;
+    }
+  } else {
+    // Auto mode: provide all templates
+    const templateLines = Object.entries(TEMPLATES)
+      .map(([type, tmpl]) => `For ${type.toUpperCase()} entries:\n${tmpl}`)
+      .join('\n\n');
+    templateInstructions = `\nUse the appropriate structured format for the text field based on the entry's category:\n${templateLines}\n\nOmit fields that have no information. Keep each field concise.`;
+  }
 
   const messages = [
     {
       role: 'system',
-      content: `You are a lorebook entry creator for interactive fiction. Create well-structured lorebook entries based on user descriptions. Output ONLY valid JSON.${characterInstructions}`,
+      content: `You are a lorebook entry creator for interactive fiction. Create well-structured lorebook entries based on user descriptions. Output ONLY valid JSON.${templateInstructions}`,
     },
     {
       role: 'user',
@@ -588,7 +742,7 @@ Output ONLY this JSON format, no other text:
         .map(e => ({
           id: generateId(),
           displayName: e.displayName,
-          category: ALL_CATEGORIES.includes(e.category) ? e.category : (category !== 'auto' ? category : 'concept'),
+          category: allCatIds.includes(e.category) ? e.category : (category !== 'auto' ? category : 'concept'),
           keys: Array.isArray(e.keys) ? e.keys.filter(k => typeof k === 'string').slice(0, 6) : [e.displayName],
           text: e.text,
           createdAt: Date.now(),
@@ -602,11 +756,18 @@ Output ONLY this JSON format, no other text:
 }
 
 /**
- * Enrich and reformat an existing character entry to match the structured template.
+ * Enrich and reformat an existing entry to match the structured template.
  * Preserves all existing information and fills in missing fields only when
  * explicitly stated or clearly demonstrated in the story.
+ * @param {string} entryType - 'character'|'location'|'item'|'faction'|'concept' (default: 'character')
  */
-async function enrichAndReformatEntry(displayName, currentText, generateTextFn, comprehensionContext, storyText) {
+async function enrichAndReformatEntry(displayName, currentText, generateTextFn, comprehensionContext, storyText, entryType) {
+  const type = entryType || 'character';
+  const template = getTemplateForType(type) || CHARACTER_TEMPLATE;
+
+  // Strip existing metadata so LLM doesn't see it
+  const { rest: textWithoutMeta } = parseMetadata(currentText || '');
+
   const comprehensionBlock = comprehensionContext
     ? `\nSTORY COMPREHENSION:\n${comprehensionContext}\n`
     : '';
@@ -618,17 +779,17 @@ async function enrichAndReformatEntry(displayName, currentText, generateTextFn, 
   const messages = [
     {
       role: 'system',
-      content: 'You enrich and reformat lorebook character entries. Fill in fields only if the information is explicitly stated or clearly demonstrated in the story. Leave fields blank rather than speculate. Return ONLY the reformatted text, no JSON or extra formatting.',
+      content: `You enrich and reformat lorebook ${type} entries. Fill in fields only if the information is explicitly stated or clearly demonstrated in the story. Leave fields blank rather than speculate. Return ONLY the reformatted text, no JSON or extra formatting.`,
     },
     {
       role: 'user',
-      content: `Enrich and reformat this character lorebook entry into the structured template below. Preserve ALL existing information. Fill in fields only if the information is explicitly stated or clearly demonstrated in the story. Leave fields blank rather than speculate.
+      content: `Enrich and reformat this ${type} lorebook entry into the structured template below. Preserve ALL existing information. Fill in fields only if the information is explicitly stated or clearly demonstrated in the story. Leave fields blank rather than speculate.
 
 Current entry for "${displayName}":
-${currentText}
+${textWithoutMeta}
 ${comprehensionBlock}${storyBlock}
 Required format:
-${CHARACTER_TEMPLATE}
+${template}
 
 Omit fields that have no explicit support in the story. Keep each field concise. Return ONLY the reformatted text.`,
     },
@@ -640,8 +801,19 @@ Omit fields that have no explicit support in the story. Keep each field concise.
       temperature: 0.35,
     });
 
-    const text = (response.output || '').trim();
-    if (text.length > 0) return text;
+    let text = (response.output || '').trim();
+    if (text.length > 0) {
+      // Preserve/update metadata header
+      const today = new Date().toISOString().slice(0, 10);
+      const existingMeta = parseMetadata(currentText || '');
+      text = setMetadata(text, {
+        type: existingMeta.type || type,
+        version: METADATA_VERSION,
+        updated: today,
+        source: 'enrichment',
+      });
+      return text;
+    }
   } catch (e) {
     console.error(`${LOG_PREFIX} Error enriching entry:`, e.message || e);
   }
@@ -684,6 +856,91 @@ function extractField(text, fieldName) {
     return (firstLine ? firstLine + '\n' : '') + continuationLines.join('\n');
   }
   return firstLine;
+}
+
+// ============================================================================
+// METADATA HEADER
+// ============================================================================
+
+const METADATA_VERSION = 2;
+
+/**
+ * Parse @-prefixed metadata header from entry text.
+ * Returns { type, version, updated, source, rest } where rest is text without header.
+ */
+function parseMetadata(text) {
+  if (!text) return { type: null, version: null, updated: null, source: null, role: null, protagonist: false, rest: '' };
+  const lines = text.split('\n');
+  const meta = { type: null, version: null, updated: null, source: null, role: null, protagonist: false };
+  let headerEnd = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^@(\w+):\s*(.+)$/);
+    if (m) {
+      const key = m[1].toLowerCase();
+      const val = m[2].trim();
+      if (key === 'type') meta.type = val;
+      else if (key === 'v') meta.version = parseInt(val, 10) || null;
+      else if (key === 'updated') meta.updated = val;
+      else if (key === 'source') meta.source = val;
+      else if (key === 'role') meta.role = val;
+      else if (key === 'protagonist') meta.protagonist = val === 'true';
+      headerEnd = i + 1;
+    } else {
+      break;
+    }
+  }
+
+  // Skip one blank line after header
+  if (headerEnd > 0 && headerEnd < lines.length && lines[headerEnd].trim() === '') {
+    headerEnd++;
+  }
+
+  return { ...meta, rest: lines.slice(headerEnd).join('\n') };
+}
+
+/**
+ * Set/replace metadata header on entry text.
+ * opts: { type, version, updated, source } — only provided fields are set.
+ */
+function setMetadata(text, opts) {
+  const existing = parseMetadata(text);
+  const type = opts.type || existing.type;
+  const version = opts.version || existing.version || METADATA_VERSION;
+  const updated = opts.updated || existing.updated;
+  const source = opts.source || existing.source;
+  // role: use explicit null to clear, undefined to preserve existing
+  const role = opts.role !== undefined ? opts.role : existing.role;
+  const protagonist = opts.protagonist !== undefined ? opts.protagonist : existing.protagonist;
+
+  const headerLines = [];
+  if (type) headerLines.push(`@type: ${type}`);
+  if (version) headerLines.push(`@v: ${version}`);
+  if (updated) headerLines.push(`@updated: ${updated}`);
+  if (source) headerLines.push(`@source: ${source}`);
+  if (role) headerLines.push(`@role: ${role}`);
+  if (protagonist) headerLines.push(`@protagonist: true`);
+
+  if (headerLines.length === 0) return existing.rest;
+  return headerLines.join('\n') + '\n\n' + existing.rest;
+}
+
+/**
+ * Quick check: does text have a metadata header?
+ */
+function hasMetadata(text) {
+  return !!text && /^@type:\s*\S/m.test(text);
+}
+
+/**
+ * Get entry type from metadata header (authoritative), falling back to heuristic.
+ */
+function getEntryType(text, displayName) {
+  const meta = parseMetadata(text);
+  if (meta.type && ['character', 'location', 'item', 'faction', 'concept'].includes(meta.type)) {
+    return meta.type;
+  }
+  return classifyEntryType(text, displayName);
 }
 
 /**
@@ -798,6 +1055,12 @@ If no changes needed: {"proposals":[]}`,
  */
 function classifyEntryType(text, displayName) {
   if (!text || text.length < 10) return 'unknown';
+
+  // Check metadata header first (authoritative)
+  const meta = parseMetadata(text);
+  if (meta.type && ['character', 'location', 'item', 'faction', 'concept'].includes(meta.type)) {
+    return meta.type;
+  }
 
   const scores = { character: 0, location: 0, item: 0, faction: 0, concept: 0 };
 
@@ -1001,6 +1264,140 @@ function findDuplicateCandidates(entries) {
   return candidates;
 }
 
+/**
+ * Group pairwise duplicate candidates into N-way clusters via union-find.
+ * Returns [{entries: [...], bestEntry, similarity}] where bestEntry = longest text.
+ */
+function findDuplicateGroups(entries) {
+  const candidates = findDuplicateCandidates(entries);
+  if (candidates.length === 0) return [];
+
+  // Union-find by entry id
+  const parent = new Map();
+  function find(id) {
+    if (!parent.has(id)) parent.set(id, id);
+    if (parent.get(id) !== id) parent.set(id, find(parent.get(id)));
+    return parent.get(id);
+  }
+  function union(a, b) {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  }
+
+  const entryById = new Map();
+  for (const c of candidates) {
+    entryById.set(c.entryA.id || c.entryA.displayName, c.entryA);
+    entryById.set(c.entryB.id || c.entryB.displayName, c.entryB);
+    union(c.entryA.id || c.entryA.displayName, c.entryB.id || c.entryB.displayName);
+  }
+
+  // Group entries by root
+  const groups = new Map();
+  for (const [id, entry] of entryById) {
+    const root = find(id);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(entry);
+  }
+
+  // Build result — only groups with 2+ entries
+  const result = [];
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    // Deduplicate by id (union-find may add same entry via different pairs)
+    const seen = new Set();
+    const unique = members.filter(e => {
+      const key = e.id || e.displayName;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (unique.length < 2) continue;
+
+    // Best entry = longest text
+    const bestEntry = unique.reduce((best, e) =>
+      (e.text || '').length > (best.text || '').length ? e : best
+    , unique[0]);
+
+    // Average similarity from relevant pairs
+    const relevantIds = new Set(unique.map(e => e.id || e.displayName));
+    const pairSims = candidates.filter(c =>
+      relevantIds.has(c.entryA.id || c.entryA.displayName) &&
+      relevantIds.has(c.entryB.id || c.entryB.displayName)
+    ).map(c => c.similarity);
+    const avgSimilarity = pairSims.length > 0
+      ? pairSims.reduce((s, v) => s + v, 0) / pairSims.length
+      : 0;
+
+    result.push({ entries: unique, bestEntry, similarity: avgSimilarity });
+  }
+
+  result.sort((a, b) => b.similarity - a.similarity);
+  return result;
+}
+
+/**
+ * LLM-confirm and merge an N-way duplicate group.
+ * Single LLM call: pick best entry, produce merged text/keys.
+ * Returns {keepEntry, removeEntries[], mergedText, mergedKeys, reason} or null.
+ */
+async function confirmAndMergeDuplicateGroup(group, storyText, generateTextFn, comprehensionContext) {
+  const { entries } = group;
+  if (entries.length < 2) return null;
+
+  const entryDescriptions = entries.map((e, idx) => {
+    return `Entry ${idx + 1}: "${e.displayName}" [keys: ${(e.keys || []).join(', ')}]\n  ${(e.text || '').slice(0, 300)}`;
+  }).join('\n\n');
+
+  const comprehensionBlock = comprehensionContext
+    ? `\nSTORY CONTEXT:\n${comprehensionContext}\n`
+    : '';
+
+  const messages = [
+    {
+      role: 'system',
+      content: 'You analyze lorebook entries for duplicates. Output ONLY valid JSON.',
+    },
+    {
+      role: 'user',
+      content: `These ${entries.length} lorebook entries may all refer to the same entity. Analyze them and determine:
+1. Are they all duplicates of the same entity? (yes/no)
+2. If yes, which entry number should be kept (the most complete one)?
+3. Provide merged text combining all unique information, and merged keys.
+${comprehensionBlock}
+${entryDescriptions}
+
+Output ONLY this JSON:
+{"isDuplicate":true,"keepIndex":1,"mergedText":"...","mergedKeys":["key1","key2"],"reason":"explanation"}
+If NOT duplicates: {"isDuplicate":false,"reason":"why not"}`,
+    },
+  ];
+
+  try {
+    const response = await generateTextFn(messages, {
+      max_tokens: 800,
+      temperature: 0.3,
+    });
+
+    const parsed = recoverJSON(response.output || '');
+    if (!parsed || !parsed.isDuplicate) return null;
+
+    const keepIdx = Math.max(0, Math.min((parsed.keepIndex || 1) - 1, entries.length - 1));
+    const keepEntry = entries[keepIdx];
+    const removeEntries = entries.filter((_, i) => i !== keepIdx);
+
+    return {
+      keepEntry,
+      removeEntries,
+      mergedText: parsed.mergedText || keepEntry.text || '',
+      mergedKeys: Array.isArray(parsed.mergedKeys) ? parsed.mergedKeys : (keepEntry.keys || []),
+      reason: parsed.reason || `Merged ${entries.length} duplicate entries`,
+    };
+  } catch (err) {
+    console.error(`${LOG_PREFIX} confirmAndMergeDuplicateGroup failed:`, err.message);
+    return null;
+  }
+}
+
 // ============================================================================
 // LLM-BASED ORGANIZE FUNCTIONS
 // ============================================================================
@@ -1089,8 +1486,11 @@ Use keepIndex "A" or "B". For non-duplicates: {"pair":1,"isDuplicate":false}`,
  * Classify entries that heuristics couldn't categorize, using LLM. Groups of 12.
  * Returns [{entryId, displayName, suggestedType, confidence}]
  */
-async function classifyUnknownEntries(unknownEntries, generateTextFn) {
+async function classifyUnknownEntries(unknownEntries, generateTextFn, customCategories) {
   if (unknownEntries.length === 0) return [];
+
+  const registry = buildCategoryRegistry(customCategories);
+  const allCatIds = getCategoryIds(registry);
 
   const results = [];
   const batchSize = 12;
@@ -1110,7 +1510,7 @@ async function classifyUnknownEntries(unknownEntries, generateTextFn) {
       },
       {
         role: 'user',
-        content: `Classify each entry into one of: character, location, item, faction, concept.
+        content: `Classify each entry into one of: ${allCatIds.join(', ')}.
 
 ${entryList}
 
@@ -1131,7 +1531,7 @@ Output ONLY this JSON:
         for (const c of parsed.classifications) {
           const idx = (c.index || 1) - 1;
           if (idx < 0 || idx >= batch.length) continue;
-          if (!ALL_CATEGORIES.includes(c.type)) continue;
+          if (!allCatIds.includes(c.type)) continue;
           if (typeof c.confidence !== 'number' || c.confidence < 3) continue;
 
           results.push({
@@ -1312,7 +1712,7 @@ async function organizeLorebook(entries, storyText, settings, generateTextFn, on
   // LLM fallback for unknowns
   if (unknowns.length > 0) {
     if (onProgress) onProgress({ phase: 'classifying-llm' });
-    const llmClassified = await classifyUnknownEntries(unknowns, generateTextFn);
+    const llmClassified = await classifyUnknownEntries(unknowns, generateTextFn, settings.customCategories);
     for (const c of llmClassified) {
       classifications.set(c.entryId, c.suggestedType);
     }
@@ -1362,14 +1762,12 @@ async function organizeLorebook(entries, storyText, settings, generateTextFn, on
   if (onProgress) onProgress({ phase: 'recategorizing' });
   console.log(`${LOG_PREFIX} Organize: checking categories`);
 
-  // Reverse map: type name -> expected category IDs
-  const typeToExpectedCatName = {
-    character: 'Characters',
-    location: 'Locations',
-    item: 'Items',
-    faction: 'Factions',
-    concept: 'Concepts',
-  };
+  // Build typeToExpectedCatName from registry (includes custom categories)
+  const registry = buildCategoryRegistry(settings.customCategories);
+  const typeToExpectedCatName = {};
+  for (const cat of registry) {
+    typeToExpectedCatName[cat.id] = cat.displayName;
+  }
 
   // categoryMap is {catId: catName}
   const catNameToId = {};
@@ -1408,6 +1806,25 @@ async function organizeLorebook(entries, storyText, settings, generateTextFn, on
       proposedCategory: expectedCatName,
       proposedType: classifiedType,
       proposedCategoryId: expectedCatId || null,
+    });
+  }
+
+  // Phase 4: Suggest metadata headers for entries missing @type
+  for (const entry of entries) {
+    if (hasMetadata(entry.text)) continue;
+    const classifiedType = classifications.get(entry.id);
+    if (!classifiedType || classifiedType === 'unknown') continue;
+
+    const cleanupId = `add-metadata_${entry.id}`;
+    if (dismissedSet.has(cleanupId)) continue;
+
+    cleanups.push({
+      id: cleanupId,
+      type: 'add-metadata',
+      entryId: entry.id,
+      displayName: entry.displayName,
+      proposedType: classifiedType,
+      currentText: entry.text,
     });
   }
 
@@ -1635,6 +2052,57 @@ async function scanForLore(storyText, settings, existingEntries, state, generate
     return { state: updatedState, summary, noResults: relationshipUpdatesFound === 0 };
   }
 
+  // Work on a copy of state (moved before Pass 0 so dedup cleanups can be added)
+  const updatedState = JSON.parse(JSON.stringify(state));
+
+  // Pass 0: Proactive deduplication — find and group existing duplicates
+  if (existingEntries.length >= 4) {
+    if (onProgress) onProgress({ phase: 'deduplicating' });
+    console.log(`${LOG_PREFIX} Pass 0: Checking ${existingEntries.length} entries for duplicates`);
+
+    const dupGroups = findDuplicateGroups(existingEntries);
+    const dismissedSet = new Set(updatedState.dismissedCleanupIds || []);
+    const existingCleanupKeys = new Set(
+      (updatedState.pendingCleanups || []).map(c => c.id)
+    );
+
+    if (dupGroups.length > 0) {
+      if (onProgress) onProgress({ phase: 'confirming-duplicates' });
+      console.log(`${LOG_PREFIX} Found ${dupGroups.length} duplicate groups, confirming via LLM...`);
+
+      for (const group of dupGroups.slice(0, 5)) {
+        const groupKey = `dupgrp_${group.entries.map(e => e.id || e.displayName).sort().join('_')}`;
+        if (dismissedSet.has(groupKey) || existingCleanupKeys.has(groupKey)) continue;
+
+        await delay(INTER_CALL_DELAY);
+        const result = await confirmAndMergeDuplicateGroup(group, storyText, generateTextFn, comprehensionContext);
+        if (result) {
+          if (!updatedState.pendingCleanups) updatedState.pendingCleanups = [];
+          updatedState.pendingCleanups.push({
+            id: groupKey,
+            type: 'duplicate-group',
+            keepEntry: {
+              id: result.keepEntry.id,
+              displayName: result.keepEntry.displayName,
+              keys: result.keepEntry.keys,
+              text: result.keepEntry.text,
+            },
+            removeEntries: result.removeEntries.map(e => ({
+              id: e.id,
+              displayName: e.displayName,
+              keys: e.keys,
+              text: e.text,
+            })),
+            mergedText: result.mergedText,
+            mergedKeys: result.mergedKeys,
+            reason: result.reason,
+          });
+          console.log(`${LOG_PREFIX} Confirmed duplicate group: ${result.keepEntry.displayName} + ${result.removeEntries.length} others`);
+        }
+      }
+    }
+  }
+
   const existingEntryNames = existingEntries
     .map(e => e.displayName)
     .filter(n => n.length > 0);
@@ -1657,11 +2125,10 @@ async function scanForLore(storyText, settings, existingEntries, state, generate
 
   if (newElements.length === 0 && existingElements.length === 0 && mergeElements.length === 0) {
     console.log(`${LOG_PREFIX} All elements already known or excluded`);
-    return { state, noResults: true };
+    // Return updatedState (not original) — Pass 0 may have added dedup cleanups
+    const hasDedup = (updatedState.pendingCleanups || []).length > (state.pendingCleanups || []).length;
+    return { state: hasDedup ? updatedState : state, noResults: !hasDedup };
   }
-
-  // Work on a copy of state
-  const updatedState = JSON.parse(JSON.stringify(state));
 
   // Set up hybrid providers with auto-fallback
   const hybrid = createHybridProviders(generateTextFn, secondaryGenerateTextFn);
@@ -1852,7 +2319,7 @@ async function scanForLore(storyText, settings, existingEntries, state, generate
     }
   }
 
-  // Pass 4: Detect unformatted character entries
+  // Pass 4: Detect unformatted entries (all types with templates)
   let reformatsFound = 0;
   const alreadyPendingNames = new Set([
     ...updatedState.pendingUpdates.map(u => u.displayName.toLowerCase()),
@@ -1860,52 +2327,50 @@ async function scanForLore(storyText, settings, existingEntries, state, generate
     ...(updatedState.dismissedReformatNames || []).map(n => n.toLowerCase()),
   ]);
 
-  console.log(`${LOG_PREFIX} Pass 4: Checking ${existingEntries.length} entries for character reformat`);
-  for (const e of existingEntries) {
-    const hasText = e.text && e.text.length > 30;
-    const formatted = hasText ? isCharacterEntryFormatted(e.text) : true;
-    const looksChar = hasText ? looksLikeCharacterEntry(e.text) : false;
-    const pending = alreadyPendingNames.has((e.displayName || '').toLowerCase());
-    if (hasText && !formatted) {
-      console.log(`${LOG_PREFIX}   "${e.displayName}": unformatted=${!formatted}, looksCharacter=${looksChar}, pending=${pending}, category=${e.category}`);
+  // Find entries that have a template for their type but aren't formatted
+  const entriesToReformat = existingEntries.filter(e => {
+    if (!e.text || e.text.length < 30) return false;
+    if (alreadyPendingNames.has((e.displayName || '').toLowerCase())) return false;
+    const entryType = getEntryType(e.text, e.displayName);
+    if (entryType === 'unknown') {
+      // Fallback: character heuristic for entries without metadata
+      return looksLikeCharacterEntry(e.text) && !isCharacterEntryFormatted(e.text);
     }
-  }
+    const tmpl = getTemplateForType(entryType);
+    return tmpl && !isEntryFormatted(e.text, entryType);
+  });
 
-  const characterEntries = existingEntries.filter(e =>
-    e.text && e.text.length > 30 &&
-    !isCharacterEntryFormatted(e.text) &&
-    looksLikeCharacterEntry(e.text) &&
-    !alreadyPendingNames.has((e.displayName || '').toLowerCase())
-  );
+  console.log(`${LOG_PREFIX} Pass 4: Found ${entriesToReformat.length} unformatted entries out of ${existingEntries.length}`);
 
-  if (characterEntries.length > 0) {
+  if (entriesToReformat.length > 0) {
     if (onProgress) onProgress({ phase: 'enriching' });
-    console.log(`${LOG_PREFIX} Found ${characterEntries.length} unformatted character entries`);
 
-    const formatBudget = Math.min(characterEntries.length, MAX_UPDATES_PER_SCAN);
+    const formatBudget = Math.min(entriesToReformat.length, MAX_UPDATES_PER_SCAN);
     for (let i = 0; i < formatBudget;) {
       await delay(INTER_CALL_DELAY);
       const formatProviders = hybrid.getProviders();
 
-      const batch = characterEntries.slice(i, Math.min(i + formatProviders.length, formatBudget));
-      const promises = batch.map((entry, idx) =>
-        enrichAndReformatEntry(entry.displayName, entry.text, formatProviders[idx], comprehensionContext, storyText)
-          .then(reformatted => ({ entry, reformatted }))
+      const batch = entriesToReformat.slice(i, Math.min(i + formatProviders.length, formatBudget));
+      const promises = batch.map((entry, idx) => {
+        const entryType = getEntryType(entry.text, entry.displayName);
+        const type = (entryType !== 'unknown') ? entryType : 'character';
+        return enrichAndReformatEntry(entry.displayName, entry.text, formatProviders[idx], comprehensionContext, storyText, type)
+          .then(reformatted => ({ entry, reformatted, type }))
           .catch(err => {
             console.error(`${LOG_PREFIX} Reformat failed for ${entry.displayName}:`, err.message);
-            return { entry, reformatted: null };
-          })
-      );
+            return { entry, reformatted: null, type };
+          });
+      });
       i += formatProviders.length;
 
       const results = await Promise.all(promises);
-      for (const { entry, reformatted } of results) {
+      for (const { entry, reformatted, type } of results) {
         if (reformatted && reformatted !== entry.text) {
           updatedState.pendingUpdates.push({
             id: generateId(),
             displayName: entry.displayName,
             keys: entry.keys || [],
-            category: 'character',
+            category: type,
             originalText: entry.text,
             updatedText: reformatted,
             isReformat: true,
@@ -2008,18 +2473,41 @@ module.exports = {
   propagateFamilyNames,
   classifyEntryType,
   findDuplicateCandidates,
+  findDuplicateGroups,
+  confirmAndMergeDuplicateGroup,
   levenshteinDistance,
   fuzzyNameScore,
   fuzzyFindEntry,
   spliceRelationshipFields,
   looksLikeCharacterEntry,
   isCharacterEntryFormatted,
+  isEntryFormatted,
+
+  // Metadata
+  parseMetadata,
+  setMetadata,
+  hasMetadata,
+  getEntryType,
+  METADATA_VERSION,
+
+  // Templates
+  TEMPLATES,
+  getTemplateForType,
+  LOCATION_TEMPLATE,
+  ITEM_TEMPLATE,
+  FACTION_TEMPLATE,
+  CONCEPT_TEMPLATE,
 
   // Constants
   DEFAULT_SETTINGS,
   ALL_CATEGORIES,
+  BUILTIN_CATEGORIES,
   MAX_INPUT_TEXT,
   MAX_ELEMENTS_PER_SCAN,
   INTER_CALL_DELAY,
   MAX_UPDATES_PER_SCAN,
+
+  // Category registry
+  buildCategoryRegistry,
+  getCategoryIds,
 };
