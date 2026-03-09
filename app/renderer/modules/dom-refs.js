@@ -290,6 +290,14 @@ export const rpgStatOverlay = document.getElementById('rpgStatOverlay');
 export const rpgStatOverlayContent = document.getElementById('rpgStatOverlayContent');
 export const rpgStatOverlayClose = document.getElementById('rpgStatOverlayClose');
 
+// LitRPG entity collection elements
+export const rpgFactionList = document.getElementById('rpgFactionList');
+export const rpgFactionCount = document.getElementById('rpgFactionCount');
+export const rpgClassList = document.getElementById('rpgClassList');
+export const rpgClassCount = document.getElementById('rpgClassCount');
+export const rpgRaceList = document.getElementById('rpgRaceList');
+export const rpgRaceCount = document.getElementById('rpgRaceCount');
+
 // TTS elements
 export const ttsNarrateBtn = document.getElementById('ttsNarrateBtn');
 export const ttsStopBtn = document.getElementById('ttsStopBtn');

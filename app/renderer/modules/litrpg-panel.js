@@ -17,6 +17,9 @@ import {
   rpgNpcSearch,
   rpgInventoryList, rpgCurrencyList, rpgStatusEffectsList,
   rpgStatOverlay, rpgStatOverlayContent, rpgStatOverlayClose,
+  rpgFactionList, rpgFactionCount,
+  rpgClassList, rpgClassCount,
+  rpgRaceList, rpgRaceCount,
   webview,
 } from './dom-refs.js';
 import { escapeHtml, showToast } from './utils.js';
@@ -113,6 +116,11 @@ export function refreshRpgUI() {
   renderInventory(rpg);
   renderCurrency(rpg);
   renderStatusEffects(rpg);
+
+  // Entity collections
+  renderFactions(rpg);
+  renderClasses(rpg);
+  renderRaces(rpg);
 }
 
 // =========================================================================
@@ -235,16 +243,23 @@ function buildStatSheetHTML(char) {
     `<div class="rpg-stat"><span class="stat-name">${escapeHtml(name)}</span><span class="stat-value">${s.value}${s.modifier != null ? ` (${s.modifier >= 0 ? '+' : ''}${s.modifier})` : ''}</span></div>`
   ).join('');
 
-  const abilitiesHTML = (char.abilities || []).map(a =>
-    `<div class="rpg-ability">${escapeHtml(a.name)}${a.level ? ` (Lv.${a.level})` : ''} — ${escapeHtml(a.description || '')}${a.cost ? ` [${escapeHtml(a.cost)}]` : ''}</div>`
-  ).join('');
+  const abilitiesHTML = (char.abilities || []).map(a => {
+    let tags = '';
+    if (a.category) tags += ` <span class="rpg-ability-cat rpg-ability-cat-${a.category}">${escapeHtml(a.category)}</span>`;
+    if (a.cooldown) tags += ` <span class="rpg-ability-cd">CD: ${escapeHtml(a.cooldown)}</span>`;
+    if (a.proficiency) tags += ` <span class="rpg-ability-prof">${escapeHtml(a.proficiency)}</span>`;
+    return `<div class="rpg-ability">${escapeHtml(a.name)}${a.level ? ` (Lv.${a.level})` : ''}${tags} — ${escapeHtml(a.description || '')}${a.cost ? ` [${escapeHtml(a.cost)}]` : ''}</div>`;
+  }).join('');
 
-  const equipmentHTML = (char.equipment || []).map(e =>
-    `<div class="rpg-equip-item">${escapeHtml(e.name)} [${escapeHtml(e.slot || 'other')}]${e.rarity && e.rarity !== 'unknown' ? ` <span class="rpg-rarity rpg-rarity-${e.rarity}">${e.rarity}</span>` : ''} — ${escapeHtml(e.description || '')}</div>`
-  ).join('');
+  const equipmentHTML = (char.equipment || []).map(e => {
+    let extras = '';
+    if (e.bonuses) extras += ` <span class="rpg-equip-bonus">{${escapeHtml(e.bonuses)}}</span>`;
+    if (e.setName) extras += ` <span class="rpg-equip-set">[${escapeHtml(e.setName)}]</span>`;
+    return `<div class="rpg-equip-item">${escapeHtml(e.name)} [${escapeHtml(e.slot || 'other')}]${e.rarity && e.rarity !== 'unknown' ? ` <span class="rpg-rarity rpg-rarity-${e.rarity}">${e.rarity}</span>` : ''}${extras} — ${escapeHtml(e.description || '')}</div>`;
+  }).join('');
 
   const inventoryHTML = (char.inventory || []).map(i =>
-    `<div class="rpg-inv-item">${escapeHtml(i.name)} x${i.quantity || 1} <span style="color:#888;">(${i.type || 'other'})</span></div>`
+    `<div class="rpg-inv-item">${escapeHtml(i.name)} x${i.quantity || 1} <span style="color:#888;">(${i.type || 'other'})</span>${i.rarity ? ` <span class="rpg-rarity rpg-rarity-${i.rarity}">${i.rarity}</span>` : ''}</div>`
   ).join('');
 
   const currencyHTML = Object.entries(char.currency || {}).length > 0
@@ -312,6 +327,7 @@ function markEditDirty() { editDirty = true; }
 const INPUT_STYLE = 'background:var(--bg-input);color:#fff;border:1px solid #555;border-radius:3px;padding:2px 6px;font-size:11px;';
 const SLOT_OPTIONS = ['weapon','off-hand','shield','helmet','armor','legs','boots','gloves','ring','amulet','cloak','belt','bracers','earring','trinket','accessory','other'];
 const RARITY_OPTIONS = ['common','uncommon','rare','epic','legendary','unknown'];
+const ABILITY_CATEGORY_OPTIONS = ['','combat','magic','crafting','social','utility','other'];
 const STATUS_TYPE_OPTIONS = ['buff','debuff','condition'];
 
 function buildSelectHTML(name, options, selected) {
@@ -327,33 +343,39 @@ function enterEditMode(charId) {
     `<div class="rpg-stat"><span class="stat-name">${escapeHtml(name)}</span><input type="number" class="rpg-edit-stat" data-stat="${escapeHtml(name)}" value="${s.value}" style="width:50px;${INPUT_STYLE}"></div>`
   ).join('');
 
-  // Abilities section
+  // Abilities section (with category, cooldown, proficiency)
   const abilitiesRows = (char.abilities || []).map((a, idx) =>
-    `<div class="rpg-edit-row" data-section="abilities" data-idx="${idx}" style="display:flex;gap:4px;align-items:center;margin-bottom:3px;">
+    `<div class="rpg-edit-row" data-section="abilities" data-idx="${idx}" style="display:flex;gap:4px;align-items:center;margin-bottom:3px;flex-wrap:wrap;">
       <input type="text" data-field="name" value="${escapeHtml(a.name)}" placeholder="Name" style="flex:2;${INPUT_STYLE}">
       <input type="number" data-field="level" value="${a.level || ''}" placeholder="Lv" style="width:40px;${INPUT_STYLE}">
+      ${buildSelectHTML('category', ABILITY_CATEGORY_OPTIONS, a.category || '')}
       <input type="text" data-field="description" value="${escapeHtml(a.description || '')}" placeholder="Description" style="flex:3;${INPUT_STYLE}">
+      <input type="text" data-field="cooldown" value="${escapeHtml(a.cooldown || '')}" placeholder="Cooldown" style="width:70px;${INPUT_STYLE}">
+      <input type="text" data-field="proficiency" value="${escapeHtml(a.proficiency || '')}" placeholder="Proficiency" style="width:80px;${INPUT_STYLE}">
       <button class="rpg-edit-remove" style="font-size:10px;color:#ff6b6b;background:none;border:none;cursor:pointer;" title="Remove">✕</button>
     </div>`
   ).join('');
 
-  // Equipment section
+  // Equipment section (with bonuses, setName)
   const equipmentRows = (char.equipment || []).map((e, idx) =>
-    `<div class="rpg-edit-row" data-section="equipment" data-idx="${idx}" style="display:flex;gap:4px;align-items:center;margin-bottom:3px;">
+    `<div class="rpg-edit-row" data-section="equipment" data-idx="${idx}" style="display:flex;gap:4px;align-items:center;margin-bottom:3px;flex-wrap:wrap;">
       <input type="text" data-field="name" value="${escapeHtml(e.name)}" placeholder="Name" style="flex:2;${INPUT_STYLE}">
       ${buildSelectHTML('slot', SLOT_OPTIONS, e.slot || 'other')}
       ${buildSelectHTML('rarity', RARITY_OPTIONS, e.rarity || 'unknown')}
+      <input type="text" data-field="bonuses" value="${escapeHtml(e.bonuses || '')}" placeholder="Bonuses" style="width:80px;${INPUT_STYLE}">
+      <input type="text" data-field="setName" value="${escapeHtml(e.setName || '')}" placeholder="Set Name" style="width:80px;${INPUT_STYLE}">
       <input type="text" data-field="description" value="${escapeHtml(e.description || '')}" placeholder="Description" style="flex:2;${INPUT_STYLE}">
       <button class="rpg-edit-remove" style="font-size:10px;color:#ff6b6b;background:none;border:none;cursor:pointer;" title="Remove">✕</button>
     </div>`
   ).join('');
 
-  // Inventory section
+  // Inventory section (with rarity)
   const inventoryRows = (char.inventory || []).map((i, idx) =>
     `<div class="rpg-edit-row" data-section="inventory" data-idx="${idx}" style="display:flex;gap:4px;align-items:center;margin-bottom:3px;">
       <input type="text" data-field="name" value="${escapeHtml(i.name)}" placeholder="Name" style="flex:2;${INPUT_STYLE}">
       <input type="number" data-field="quantity" value="${i.quantity || 1}" placeholder="Qty" style="width:45px;${INPUT_STYLE}">
       ${buildSelectHTML('type', ['consumable','material','quest_item','other'], i.type || 'other')}
+      ${buildSelectHTML('rarity', ['','common','uncommon','rare','epic','legendary'], i.rarity || '')}
       <button class="rpg-edit-remove" style="font-size:10px;color:#ff6b6b;background:none;border:none;cursor:pointer;" title="Remove">✕</button>
     </div>`
   ).join('');
@@ -491,11 +513,11 @@ function getEmptyRowHTML(section) {
   const rm = `<button class="rpg-edit-remove" style="font-size:10px;color:#ff6b6b;background:none;border:none;cursor:pointer;" title="Remove">✕</button>`;
   switch (section) {
     case 'abilities':
-      return `<input type="text" data-field="name" placeholder="Name" style="flex:2;${INPUT_STYLE}"><input type="number" data-field="level" placeholder="Lv" style="width:40px;${INPUT_STYLE}"><input type="text" data-field="description" placeholder="Description" style="flex:3;${INPUT_STYLE}">${rm}`;
+      return `<input type="text" data-field="name" placeholder="Name" style="flex:2;${INPUT_STYLE}"><input type="number" data-field="level" placeholder="Lv" style="width:40px;${INPUT_STYLE}">${buildSelectHTML('category', ABILITY_CATEGORY_OPTIONS, '')}<input type="text" data-field="description" placeholder="Description" style="flex:3;${INPUT_STYLE}"><input type="text" data-field="cooldown" placeholder="Cooldown" style="width:70px;${INPUT_STYLE}"><input type="text" data-field="proficiency" placeholder="Proficiency" style="width:80px;${INPUT_STYLE}">${rm}`;
     case 'equipment':
-      return `<input type="text" data-field="name" placeholder="Name" style="flex:2;${INPUT_STYLE}">${buildSelectHTML('slot', SLOT_OPTIONS, 'other')}${buildSelectHTML('rarity', RARITY_OPTIONS, 'unknown')}<input type="text" data-field="description" placeholder="Description" style="flex:2;${INPUT_STYLE}">${rm}`;
+      return `<input type="text" data-field="name" placeholder="Name" style="flex:2;${INPUT_STYLE}">${buildSelectHTML('slot', SLOT_OPTIONS, 'other')}${buildSelectHTML('rarity', RARITY_OPTIONS, 'unknown')}<input type="text" data-field="bonuses" placeholder="Bonuses" style="width:80px;${INPUT_STYLE}"><input type="text" data-field="setName" placeholder="Set Name" style="width:80px;${INPUT_STYLE}"><input type="text" data-field="description" placeholder="Description" style="flex:2;${INPUT_STYLE}">${rm}`;
     case 'inventory':
-      return `<input type="text" data-field="name" placeholder="Name" style="flex:2;${INPUT_STYLE}"><input type="number" data-field="quantity" value="1" placeholder="Qty" style="width:45px;${INPUT_STYLE}">${buildSelectHTML('type', ['consumable','material','quest_item','other'], 'other')}${rm}`;
+      return `<input type="text" data-field="name" placeholder="Name" style="flex:2;${INPUT_STYLE}"><input type="number" data-field="quantity" value="1" placeholder="Qty" style="width:45px;${INPUT_STYLE}">${buildSelectHTML('type', ['consumable','material','quest_item','other'], 'other')}${buildSelectHTML('rarity', ['','common','uncommon','rare','epic','legendary'], '')}${rm}`;
     case 'currency':
       return `<input type="text" data-field="unit" placeholder="Currency" style="flex:1;${INPUT_STYLE}"><input type="number" data-field="amount" placeholder="Amount" style="width:80px;${INPUT_STYLE}">${rm}`;
     case 'statusEffects':
@@ -555,6 +577,7 @@ async function saveEdit(charId) {
   if (abilitiesData.length > 0 || rpgStatOverlayContent.querySelector('#rpgEditAbilities')) {
     updates.abilities = abilitiesData.map(a => ({
       name: a.name, level: a.level || null, description: a.description || '', type: 'active', cost: null,
+      category: a.category || null, cooldown: a.cooldown || null, proficiency: a.proficiency || null,
     }));
   }
 
@@ -562,6 +585,7 @@ async function saveEdit(charId) {
   if (equipmentData.length > 0 || rpgStatOverlayContent.querySelector('#rpgEditEquipment')) {
     updates.equipment = equipmentData.map(e => ({
       name: e.name, slot: e.slot || 'other', rarity: e.rarity || 'unknown', description: e.description || '',
+      bonuses: e.bonuses || null, setName: e.setName || null,
     }));
   }
 
@@ -569,6 +593,7 @@ async function saveEdit(charId) {
   if (inventoryData.length > 0 || rpgStatOverlayContent.querySelector('#rpgEditInventory')) {
     updates.inventory = inventoryData.map(i => ({
       name: i.name, quantity: i.quantity || 1, type: i.type || 'other',
+      rarity: i.rarity || null,
     }));
   }
 
@@ -809,7 +834,7 @@ function renderInventory(rpg) {
   }
 
   rpgInventoryList.innerHTML = allItems.map(i =>
-    `<div class="rpg-inv-row"><span class="rpg-inv-name">${escapeHtml(i.name)} x${i.quantity || 1}</span><span class="rpg-inv-type">${escapeHtml(i.type || 'other')}</span><span class="rpg-inv-owner">${escapeHtml(i.owner)}</span></div>`
+    `<div class="rpg-inv-row"><span class="rpg-inv-name">${escapeHtml(i.name)} x${i.quantity || 1}</span>${i.rarity ? `<span class="rpg-rarity rpg-rarity-${i.rarity}">${i.rarity}</span>` : ''}<span class="rpg-inv-type">${escapeHtml(i.type || 'other')}</span><span class="rpg-inv-owner">${escapeHtml(i.owner)}</span></div>`
   ).join('');
 }
 
@@ -851,6 +876,94 @@ function renderStatusEffects(rpg) {
   rpgStatusEffectsList.innerHTML = allEffects.map(s =>
     `<div class="rpg-status-row"><span class="rpg-status-tag rpg-status-${s.type || 'buff'}">${escapeHtml(s.name)}</span><span class="rpg-inv-owner">${escapeHtml(s.owner)}</span>${s.duration ? `<span style="font-size:9px;color:#888;">${escapeHtml(s.duration)}</span>` : ''}</div>`
   ).join('');
+}
+
+// =========================================================================
+// ENTITY COLLECTION RENDERERS
+// =========================================================================
+
+function renderFactions(rpg) {
+  if (!rpgFactionList) return;
+  const factions = Object.values(rpg.factions || {});
+  if (rpgFactionCount) rpgFactionCount.textContent = `(${factions.length})`;
+
+  if (factions.length === 0) {
+    rpgFactionList.innerHTML = '<div style="font-size:11px;color:#666;padding:4px;">No factions tracked yet.</div>';
+    return;
+  }
+
+  rpgFactionList.innerHTML = factions.map(fac => {
+    const dispClass = `rpg-disposition-${(fac.disposition || 'unknown').toLowerCase()}`;
+    const members = (fac.members || []).map(m => escapeHtml(m)).join(', ');
+    return `<div class="rpg-entity-card">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span class="rpg-entity-name">${escapeHtml(fac.name)}</span>
+        <span class="rpg-disposition ${dispClass}">${escapeHtml(fac.disposition || 'unknown')}</span>
+        <span style="font-size:9px;color:#666;">${(fac.members || []).length} members</span>
+      </div>
+      ${fac.description ? `<div class="rpg-entity-desc">${escapeHtml(fac.description)}</div>` : ''}
+      ${fac.territory ? `<div style="font-size:10px;color:#888;">Territory: ${escapeHtml(fac.territory)}</div>` : ''}
+      ${members ? `<div class="rpg-entity-members">Members: ${members}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderClasses(rpg) {
+  if (!rpgClassList) return;
+  const classes = Object.values(rpg.classes || {});
+  if (rpgClassCount) rpgClassCount.textContent = `(${classes.length})`;
+
+  if (classes.length === 0) {
+    rpgClassList.innerHTML = '<div style="font-size:11px;color:#666;padding:4px;">No classes tracked yet.</div>';
+    return;
+  }
+
+  // Sort: classes first, then subclasses
+  const sorted = [...classes].sort((a, b) => {
+    if (a.type === 'class' && b.type === 'subclass') return -1;
+    if (a.type === 'subclass' && b.type === 'class') return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  rpgClassList.innerHTML = sorted.map(cls => {
+    const practitioners = (cls.practitioners || []).map(p => escapeHtml(p)).join(', ');
+    const typeLabel = cls.type === 'subclass' ? `<span style="font-size:9px;color:#ce93d8;">subclass</span>` : '';
+    const parent = cls.parentClass ? `<span style="font-size:9px;color:#888;"> of ${escapeHtml(cls.parentClass)}</span>` : '';
+    return `<div class="rpg-entity-card" style="${cls.type === 'subclass' ? 'margin-left:12px;' : ''}">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span class="rpg-entity-name">${escapeHtml(cls.name)}</span>
+        ${typeLabel}${parent}
+        <span style="font-size:9px;color:#666;">${(cls.practitioners || []).length} practitioners</span>
+      </div>
+      ${cls.description ? `<div class="rpg-entity-desc">${escapeHtml(cls.description)}</div>` : ''}
+      ${cls.requirements ? `<div style="font-size:10px;color:#888;">Requires: ${escapeHtml(cls.requirements)}</div>` : ''}
+      ${practitioners ? `<div class="rpg-entity-members">${practitioners}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderRaces(rpg) {
+  if (!rpgRaceList) return;
+  const races = Object.values(rpg.races || {});
+  if (rpgRaceCount) rpgRaceCount.textContent = `(${races.length})`;
+
+  if (races.length === 0) {
+    rpgRaceList.innerHTML = '<div style="font-size:11px;color:#666;padding:4px;">No races tracked yet.</div>';
+    return;
+  }
+
+  rpgRaceList.innerHTML = races.map(race => {
+    const members = (race.knownMembers || []).map(m => escapeHtml(m)).join(', ');
+    return `<div class="rpg-entity-card">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span class="rpg-entity-name">${escapeHtml(race.name)}</span>
+        <span style="font-size:9px;color:#666;">${(race.knownMembers || []).length} known</span>
+      </div>
+      ${race.description ? `<div class="rpg-entity-desc">${escapeHtml(race.description)}</div>` : ''}
+      ${race.traits ? `<div style="font-size:10px;color:#d4a574;">Traits: ${escapeHtml(race.traits)}</div>` : ''}
+      ${members ? `<div class="rpg-entity-members">${members}</div>` : ''}
+    </div>`;
+  }).join('');
 }
 
 // =========================================================================

@@ -2438,6 +2438,32 @@
     .rpg-rarity-rare { color: #3b82f6; }
     .rpg-rarity-epic { color: #a855f7; }
     .rpg-rarity-legendary { color: #f59e0b; }
+    /* Ability category badges */
+    .rpg-ability-cat { font-size: 8px; padding: 1px 4px; border-radius: 3px; font-weight: 600; vertical-align: middle; }
+    .rpg-ability-cat-combat { background: rgba(239,68,68,0.2); color: #ef4444; }
+    .rpg-ability-cat-magic { background: rgba(168,85,247,0.2); color: #a855f7; }
+    .rpg-ability-cat-crafting { background: rgba(234,179,8,0.2); color: #eab308; }
+    .rpg-ability-cat-social { background: rgba(59,130,246,0.2); color: #3b82f6; }
+    .rpg-ability-cat-utility { background: rgba(16,185,129,0.2); color: #10b981; }
+    .rpg-ability-cat-other { background: rgba(156,163,175,0.2); color: #9ca3af; }
+    .rpg-ability-cd { font-size: 8px; color: #f59e0b; }
+    .rpg-ability-prof { font-size: 8px; color: #10b981; font-style: italic; }
+    /* Equipment extras */
+    .rpg-equip-bonus { font-size: 9px; color: #4fc3f7; font-weight: 600; }
+    .rpg-equip-set { font-size: 9px; color: #ce93d8; font-style: italic; }
+    /* Faction disposition badges */
+    .rpg-disposition { font-size: 9px; padding: 1px 6px; border-radius: 3px; font-weight: 600; }
+    .rpg-disposition-ally { background: rgba(16,185,129,0.2); color: #10b981; }
+    .rpg-disposition-friendly { background: rgba(16,185,129,0.2); color: #10b981; }
+    .rpg-disposition-neutral { background: rgba(156,163,175,0.2); color: #9ca3af; }
+    .rpg-disposition-hostile { background: rgba(239,68,68,0.2); color: #ef4444; }
+    .rpg-disposition-unknown { background: rgba(156,163,175,0.15); color: #666; }
+    /* Entity list items */
+    .rpg-entity-card { padding: 6px 8px; background: rgba(255,255,255,0.03); border-radius: 4px; margin-bottom: 4px; font-size: 11px; }
+    .rpg-entity-card:hover { background: rgba(255,255,255,0.06); }
+    .rpg-entity-name { font-weight: 600; color: #e0e0e0; }
+    .rpg-entity-desc { font-size: 10px; color: #888; margin-top: 2px; }
+    .rpg-entity-members { font-size: 10px; color: #666; margin-top: 2px; }
     /* Bulk action buttons */
     .rpg-bulk-actions {
       display: flex;
@@ -3087,6 +3113,24 @@
         <details class="lore-section">
           <summary>Status Effects</summary>
           <div id="rpgStatusEffectsList"></div>
+        </details>
+
+        <!-- Factions -->
+        <details class="lore-section">
+          <summary>Factions <span id="rpgFactionCount" style="color:#888;font-size:10px;"></span></summary>
+          <div id="rpgFactionList"></div>
+        </details>
+
+        <!-- Classes -->
+        <details class="lore-section">
+          <summary>Classes <span id="rpgClassCount" style="color:#888;font-size:10px;"></span></summary>
+          <div id="rpgClassList"></div>
+        </details>
+
+        <!-- Races -->
+        <details class="lore-section">
+          <summary>Races <span id="rpgRaceCount" style="color:#888;font-size:10px;"></span></summary>
+          <div id="rpgRaceList"></div>
         </details>
 
         <!-- RPG Settings -->
