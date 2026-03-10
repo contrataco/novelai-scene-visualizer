@@ -24,10 +24,18 @@ import {
   scenePromptTemperature, scenePromptTemperatureValue,
   sceneSuggestionStyle, sceneSuggestionTemperature, sceneSuggestionTemperatureValue,
   sceneEnableLitrpg,
-  ttsProviderSelect, ttsNarratorVoiceSelect, ttsDialogueVoiceSelect,
+  scenePipelineVersion, sceneSecondaryLlm,
+  textLlmOpenaiKey, textLlmOpenaiModel, textLlmAnthropicKey, textLlmAnthropicModel,
+  textLlmOllamaModelSelect,
+  ttsProviderSelect, ttsVersionSelect, ttsVersionGroup,
+  ttsNarratorVoiceSelect, ttsDialogueVoiceSelect,
   ttsSpeedSlider, ttsSpeedValue, ttsFirstPersonCheckbox,
   ttsSettingsVoiceList, ttsSettingsVoiceCount,
   ttsAddCharName, ttsAddCharVoice, ttsAddCharBtn,
+  ttsV2NarratorGroup, ttsV2DialogueGroup,
+  ttsNarratorStyle, ttsNarratorIntonation, ttsNarratorCadence,
+  ttsDialogueStyle, ttsDialogueIntonation, ttsDialogueCadence,
+  ttsNarratorCustomSeed, ttsDialogueCustomSeed, ttsAddCharCustomSeed,
   RESOLUTION_PRESETS, V4_MODELS,
 } from './dom-refs.js';
 import { state, bus } from './state.js';
@@ -192,21 +200,117 @@ function updatePuterQualityVisibility() {
   }
 }
 
+// Toggle v2 fields visibility based on TTS version and provider
+function updateTtsV2Visibility() {
+  const isNovelai = ttsProviderSelect.value !== 'venice';
+  const ver = ttsVersionSelect.value;
+  const showV2 = isNovelai && (ver === 'v2' || ver === 'auto');
+  ttsVersionGroup.style.display = isNovelai ? '' : 'none';
+  ttsV2NarratorGroup.style.display = showV2 ? '' : 'none';
+  ttsV2DialogueGroup.style.display = showV2 ? '' : 'none';
+  // Custom seed inputs
+  if (ttsNarratorCustomSeed) ttsNarratorCustomSeed.style.display = ttsNarratorVoiceSelect.value === '__custom__' ? '' : 'none';
+  if (ttsDialogueCustomSeed) ttsDialogueCustomSeed.style.display = ttsDialogueVoiceSelect.value === '__custom__' ? '' : 'none';
+}
+
+// Populate v2 fields from a voice value (string preset or v2 object)
+function populateV2Fields(voice, styleEl, intonationEl, cadenceEl) {
+  if (voice && typeof voice === 'object' && voice.v === 2) {
+    styleEl.value = voice.style || '';
+    intonationEl.value = voice.intonation || '';
+    cadenceEl.value = voice.cadence || '';
+  } else {
+    const seed = voice || '';
+    styleEl.value = seed;
+    intonationEl.value = seed;
+    cadenceEl.value = seed;
+  }
+}
+
+// Build voice value from v2 fields, dropdown, and custom seed input.
+// If all three v2 fields match, return string; if they diverge, return v2 object.
+function buildVoiceValue(selectEl, styleEl, intonationEl, cadenceEl, ttsVersion, customSeedEl) {
+  const preset = selectEl.value;
+  // Custom seed mode — use the custom seed text input
+  if (preset === '__custom__') {
+    const customSeed = customSeedEl?.value?.trim();
+    if (ttsVersion === 'v2' || ttsVersion === 'auto') {
+      const s = styleEl.value.trim();
+      const i = intonationEl.value.trim();
+      const c = cadenceEl.value.trim();
+      // If v2 fields are customized, use them
+      if (s && (s !== i || s !== c)) return { v: 2, style: s, intonation: i || s, cadence: c || s };
+      // Otherwise use the custom seed text
+      if (customSeed) return customSeed;
+      return s || 'Cyllene';
+    }
+    return customSeed || 'Cyllene';
+  }
+  // Preset selected — check if v2 fields diverge
+  if (ttsVersion === 'v2' || ttsVersion === 'auto') {
+    const s = styleEl.value.trim();
+    const i = intonationEl.value.trim();
+    const c = cadenceEl.value.trim();
+    if (s && (s !== preset || i !== preset || c !== preset)) {
+      return { v: 2, style: s, intonation: i || s, cadence: c || s };
+    }
+  }
+  return preset || 'Cyllene';
+}
+
+// Populate a voice <select> with grouped voices (v2/v1/custom)
+function populateVoiceSelect(sel, voices, addCustomOption) {
+  const prev = sel.value;
+  sel.innerHTML = '';
+  // Group by version
+  const v2 = voices.filter(v => v.version === 'v2');
+  const v1 = voices.filter(v => v.version === 'v1');
+  const other = voices.filter(v => !v.version);
+  if (v2.length) {
+    const grp = document.createElement('optgroup');
+    grp.label = 'v2 Voices';
+    for (const v of v2) {
+      const opt = document.createElement('option');
+      opt.value = v.id;
+      opt.textContent = v.name;
+      grp.appendChild(opt);
+    }
+    sel.appendChild(grp);
+  }
+  if (v1.length) {
+    const grp = document.createElement('optgroup');
+    grp.label = 'v1 Voices (legacy)';
+    for (const v of v1) {
+      const opt = document.createElement('option');
+      opt.value = v.id;
+      opt.textContent = v.name;
+      grp.appendChild(opt);
+    }
+    sel.appendChild(grp);
+  }
+  for (const v of other) {
+    const opt = document.createElement('option');
+    opt.value = v.id;
+    opt.textContent = v.name;
+    sel.appendChild(opt);
+  }
+  if (addCustomOption) {
+    const customOpt = document.createElement('option');
+    customOpt.value = '__custom__';
+    customOpt.textContent = 'Custom seed...';
+    sel.appendChild(customOpt);
+  }
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
 // Load TTS voices into narrator and dialogue dropdowns
 async function loadTtsVoices() {
   try {
     const voices = await window.sceneVisualizer.ttsGetVoices();
     for (const sel of [ttsNarratorVoiceSelect, ttsDialogueVoiceSelect, ttsAddCharVoice]) {
       if (!sel) continue;
-      const prev = sel.value;
-      sel.innerHTML = '';
-      for (const v of voices) {
-        const opt = document.createElement('option');
-        opt.value = v.id;
-        opt.textContent = v.name;
-        sel.appendChild(opt);
-      }
-      if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+      const addCustom = sel === ttsNarratorVoiceSelect || sel === ttsDialogueVoiceSelect || sel === ttsAddCharVoice;
+      populateVoiceSelect(sel, voices, addCustom);
     }
     return voices;
   } catch (e) {
@@ -235,12 +339,15 @@ function renderSettingsVoiceList(voices) {
 
     const sel = document.createElement('select');
     sel.style.cssText = 'flex:1;font-size:11px;';
-    for (const v of voices) {
-      const opt = document.createElement('option');
-      opt.value = v.id;
-      opt.textContent = v.name;
-      if (v.id === voiceId) opt.selected = true;
-      sel.appendChild(opt);
+    populateVoiceSelect(sel, voices, true);
+    if (voiceId) sel.value = voiceId;
+    // If voiceId is a custom seed not in the presets, add it as an option
+    if (voiceId && !sel.value) {
+      const customOpt = document.createElement('option');
+      customOpt.value = voiceId;
+      customOpt.textContent = voiceId + ' (custom)';
+      sel.insertBefore(customOpt, sel.firstChild);
+      sel.value = voiceId;
     }
     sel.addEventListener('change', async () => {
       if (state.currentStoryId) {
@@ -284,7 +391,13 @@ export function init() {
   if (ttsAddCharBtn) {
     ttsAddCharBtn.addEventListener('click', async () => {
       const name = ttsAddCharName.value.trim();
-      const voice = ttsAddCharVoice.value;
+      let voice = ttsAddCharVoice.value;
+      // Use custom seed text if "Custom seed..." is selected
+      if (voice === '__custom__' && ttsAddCharCustomSeed) {
+        const customSeed = ttsAddCharCustomSeed.value.trim();
+        if (!customSeed) return;
+        voice = customSeed;
+      }
       if (!name) return;
       if (!state.currentStoryId) return;
       if (!state.ttsState) state.ttsState = { characterVoices: {} };
@@ -302,7 +415,35 @@ export function init() {
     await loadTtsVoices();
     document.getElementById('ttsSpeedGroup').style.display =
       ttsProviderSelect.value === 'venice' ? '' : 'none';
+    updateTtsV2Visibility();
   });
+
+  // TTS version change — toggle v2 fields
+  ttsVersionSelect.addEventListener('change', () => {
+    updateTtsV2Visibility();
+  });
+
+  // Sync v2 fields when a preset is selected in narrator/dialogue dropdowns + toggle custom seed
+  ttsNarratorVoiceSelect.addEventListener('change', () => {
+    const val = ttsNarratorVoiceSelect.value;
+    if (ttsNarratorCustomSeed) ttsNarratorCustomSeed.style.display = val === '__custom__' ? '' : 'none';
+    if (val && val !== '__custom__') {
+      populateV2Fields(val, ttsNarratorStyle, ttsNarratorIntonation, ttsNarratorCadence);
+    }
+  });
+  ttsDialogueVoiceSelect.addEventListener('change', () => {
+    const val = ttsDialogueVoiceSelect.value;
+    if (ttsDialogueCustomSeed) ttsDialogueCustomSeed.style.display = val === '__custom__' ? '' : 'none';
+    if (val && val !== '__custom__') {
+      populateV2Fields(val, ttsDialogueStyle, ttsDialogueIntonation, ttsDialogueCadence);
+    }
+  });
+  // Character voice add — toggle custom seed input
+  if (ttsAddCharVoice && ttsAddCharCustomSeed) {
+    ttsAddCharVoice.addEventListener('change', () => {
+      ttsAddCharCustomSeed.style.display = ttsAddCharVoice.value === '__custom__' ? '' : 'none';
+    });
+  }
 
   // Scene settings sliders
   sceneMinTextChange.addEventListener('input', () => {
@@ -452,6 +593,11 @@ export function init() {
 
   // Settings open
   settingsBtn.addEventListener('click', async () => {
+    // Load per-story settings if a story is active (overrides globals for TTS/image/scene)
+    const storySettings = state.currentStoryId
+      ? await window.sceneVisualizer.storySettingsGet(state.currentStoryId)
+      : null;
+
     const [token, settings, currentProvider, keyStatus, perchanceSettings, novelaiArtStyle, veniceSettings, veniceKeyStatus, puterSettings, sceneSettingsData] = await Promise.all([
       window.sceneVisualizer.getApiToken(),
       window.sceneVisualizer.getImageSettings(),
@@ -465,38 +611,105 @@ export function init() {
       window.sceneVisualizer.getSceneSettings(),
     ]);
 
+    // Use per-story overrides when available
+    const effectiveSettings = storySettings?.imageSettings || settings;
+    const effectiveProvider = storySettings?.imageProvider || currentProvider;
+    const effectiveArtStyle = storySettings?.novelaiArtStyle || novelaiArtStyle;
+    const effectiveSceneSettings = storySettings?.sceneSettings
+      ? { ...sceneSettingsData, ...storySettings.sceneSettings }
+      : sceneSettingsData;
+
     // TTS settings (wrapped — must not abort settings open on failure)
     try {
-      const ttsSettings = await window.sceneVisualizer.ttsGetSettings();
+      const ttsSettings = storySettings || await window.sceneVisualizer.ttsGetSettings();
       ttsProviderSelect.value = ttsSettings.ttsProvider || 'novelai';
+      ttsVersionSelect.value = ttsSettings.ttsVersion || 'auto';
       ttsSpeedSlider.value = ttsSettings.ttsSpeed || 1.0;
       ttsSpeedValue.textContent = ttsSettings.ttsSpeed || 1.0;
       ttsFirstPersonCheckbox.checked = !!ttsSettings.ttsFirstPerson;
       document.getElementById('ttsSpeedGroup').style.display =
         ttsProviderSelect.value === 'venice' ? '' : 'none';
       const voices = await loadTtsVoices();
-      ttsNarratorVoiceSelect.value = ttsSettings.ttsNarratorVoice || '';
-      ttsDialogueVoiceSelect.value = ttsSettings.ttsDialogueVoice || '';
+      // Load narrator voice — handle object values (v2 custom) or custom seed strings
+      const narVoice = ttsSettings.ttsNarratorVoice;
+      if (narVoice && typeof narVoice === 'object' && narVoice.v === 2) {
+        ttsNarratorVoiceSelect.value = '__custom__';
+      } else if (narVoice && ![...ttsNarratorVoiceSelect.options].some(o => o.value === narVoice)) {
+        // Custom seed string not in presets
+        ttsNarratorVoiceSelect.value = '__custom__';
+        if (ttsNarratorCustomSeed) ttsNarratorCustomSeed.value = narVoice;
+      } else {
+        ttsNarratorVoiceSelect.value = narVoice || '';
+      }
+      if (ttsNarratorCustomSeed) ttsNarratorCustomSeed.style.display = ttsNarratorVoiceSelect.value === '__custom__' ? '' : 'none';
+      populateV2Fields(narVoice, ttsNarratorStyle, ttsNarratorIntonation, ttsNarratorCadence);
+      // Load dialogue voice — handle object values (v2 custom) or custom seed strings
+      const dlgVoice = ttsSettings.ttsDialogueVoice;
+      if (dlgVoice && typeof dlgVoice === 'object' && dlgVoice.v === 2) {
+        ttsDialogueVoiceSelect.value = '__custom__';
+      } else if (dlgVoice && ![...ttsDialogueVoiceSelect.options].some(o => o.value === dlgVoice)) {
+        ttsDialogueVoiceSelect.value = '__custom__';
+        if (ttsDialogueCustomSeed) ttsDialogueCustomSeed.value = dlgVoice;
+      } else {
+        ttsDialogueVoiceSelect.value = dlgVoice || '';
+      }
+      if (ttsDialogueCustomSeed) ttsDialogueCustomSeed.style.display = ttsDialogueVoiceSelect.value === '__custom__' ? '' : 'none';
+      populateV2Fields(dlgVoice, ttsDialogueStyle, ttsDialogueIntonation, ttsDialogueCadence);
+      updateTtsV2Visibility();
       renderSettingsVoiceList(voices);
     } catch (e) {
       console.error('[Settings] TTS load error:', e);
     }
 
+    // Text LLM / Pipeline settings (wrapped — must not abort settings open on failure)
+    try {
+      const textLlmSettings = await window.sceneVisualizer.textLlmGetSettings();
+      scenePipelineVersion.value = String(textLlmSettings.pipelineVersion || 1);
+      sceneSecondaryLlm.value = textLlmSettings.secondaryLlm || 'none';
+      textLlmOpenaiKey.value = '';
+      textLlmOpenaiKey.placeholder = textLlmSettings.openaiApiKey ? 'Key configured (enter new to replace)' : 'sk-...';
+      textLlmOpenaiModel.value = textLlmSettings.openaiModel || 'gpt-4o-mini';
+      textLlmAnthropicKey.value = '';
+      textLlmAnthropicKey.placeholder = textLlmSettings.anthropicApiKey ? 'Key configured (enter new to replace)' : 'sk-ant-...';
+      textLlmAnthropicModel.value = textLlmSettings.anthropicModel || 'claude-sonnet-4-20250514';
+      // Load Ollama models
+      const ollamaResult = await window.sceneVisualizer.textLlmListOllamaModels();
+      textLlmOllamaModelSelect.innerHTML = '';
+      if (ollamaResult.success && ollamaResult.models.length > 0) {
+        for (const m of ollamaResult.models) {
+          const opt = document.createElement('option');
+          opt.value = m.id;
+          opt.textContent = m.name;
+          textLlmOllamaModelSelect.appendChild(opt);
+        }
+        // Select current model from lore LLM provider settings (authoritative source)
+        const loreLlm = await window.sceneVisualizer.loreGetLlmProvider();
+        if (loreLlm.ollamaModel) textLlmOllamaModelSelect.value = loreLlm.ollamaModel;
+      } else {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = ollamaResult.success ? 'No models found' : 'Ollama not available';
+        textLlmOllamaModelSelect.appendChild(opt);
+      }
+    } catch (e) {
+      console.error('[Settings] Text LLM load error:', e);
+    }
+
     // Scene settings
-    sceneAutoGenerate.checked = sceneSettingsData.autoGeneratePrompts !== false;
-    sceneUseCharacterLore.checked = sceneSettingsData.useCharacterLore !== false;
-    sceneArtStyleTags.value = sceneSettingsData.artStyleTags || '';
-    sceneMinTextChange.value = sceneSettingsData.minTextChange || 50;
-    sceneMinTextChangeValue.textContent = sceneSettingsData.minTextChange || 50;
-    scenePromptTemperature.value = sceneSettingsData.promptTemperature || 0.7;
-    scenePromptTemperatureValue.textContent = sceneSettingsData.promptTemperature || 0.7;
-    sceneSuggestionStyle.value = sceneSettingsData.suggestionStyle || 'mixed';
-    sceneSuggestionTemperature.value = sceneSettingsData.suggestionTemperature || 0.6;
-    sceneSuggestionTemperatureValue.textContent = sceneSettingsData.suggestionTemperature || 0.6;
+    sceneAutoGenerate.checked = effectiveSceneSettings.autoGeneratePrompts !== false;
+    sceneUseCharacterLore.checked = effectiveSceneSettings.useCharacterLore !== false;
+    sceneArtStyleTags.value = effectiveSceneSettings.artStyleTags || '';
+    sceneMinTextChange.value = effectiveSceneSettings.minTextChange || 50;
+    sceneMinTextChangeValue.textContent = effectiveSceneSettings.minTextChange || 50;
+    scenePromptTemperature.value = effectiveSceneSettings.promptTemperature || 0.7;
+    scenePromptTemperatureValue.textContent = effectiveSceneSettings.promptTemperature || 0.7;
+    sceneSuggestionStyle.value = effectiveSceneSettings.suggestionStyle || 'mixed';
+    sceneSuggestionTemperature.value = effectiveSceneSettings.suggestionTemperature || 0.6;
+    sceneSuggestionTemperatureValue.textContent = effectiveSceneSettings.suggestionTemperature || 0.6;
     sceneEnableLitrpg.checked = !!(state.litrpgState && state.litrpgState.enabled);
 
     // Provider
-    providerSelect.value = currentProvider || 'novelai';
+    providerSelect.value = effectiveProvider || 'novelai';
     updateProviderSections();
 
     // Perchance key status
@@ -514,7 +727,7 @@ export function init() {
     perchanceGuidanceValue.textContent = perchanceSettings.guidanceScale || 7;
 
     // NovelAI art style
-    novelaiArtStyleSelect.value = novelaiArtStyle || 'no-style';
+    novelaiArtStyleSelect.value = effectiveArtStyle || 'no-style';
 
     // Venice AI settings
     if (veniceKeyStatus.hasKey) {
@@ -576,33 +789,33 @@ export function init() {
     document.getElementById('apiToken').placeholder = token ? 'Token configured (enter new to replace)' : 'Enter your persistent API token';
 
     // Model
-    modelSelect.value = settings.model || 'nai-diffusion-4-curated-preview';
+    modelSelect.value = effectiveSettings.model || 'nai-diffusion-4-curated-preview';
 
     // Resolution
-    imgWidth.value = settings.width || 832;
-    imgHeight.value = settings.height || 1216;
+    imgWidth.value = effectiveSettings.width || 832;
+    imgHeight.value = effectiveSettings.height || 1216;
 
     // Find matching preset
     const matchingPreset = Object.entries(RESOLUTION_PRESETS).find(
-      ([, p]) => p.width === settings.width && p.height === settings.height
+      ([, p]) => p.width === effectiveSettings.width && p.height === effectiveSettings.height
     );
     resolutionPreset.value = matchingPreset ? matchingPreset[0] : 'custom';
 
     // Generation parameters
-    samplerSelect.value = settings.sampler || 'k_euler';
-    noiseScheduleSelect.value = settings.noiseSchedule || 'karras';
-    stepsInput.value = settings.steps || 28;
-    scaleInput.value = settings.scale || 5;
-    cfgRescaleSlider.value = settings.cfgRescale || 0;
-    cfgRescaleValue.textContent = settings.cfgRescale || 0;
+    samplerSelect.value = effectiveSettings.sampler || 'k_euler';
+    noiseScheduleSelect.value = effectiveSettings.noiseSchedule || 'karras';
+    stepsInput.value = effectiveSettings.steps || 28;
+    scaleInput.value = effectiveSettings.scale || 5;
+    cfgRescaleSlider.value = effectiveSettings.cfgRescale || 0;
+    cfgRescaleValue.textContent = effectiveSettings.cfgRescale || 0;
 
     // V3 options (SMEA)
-    smeaCheckbox.checked = settings.smea || false;
-    smeaDynCheckbox.checked = settings.smeaDyn || false;
+    smeaCheckbox.checked = effectiveSettings.smea || false;
+    smeaDynCheckbox.checked = effectiveSettings.smeaDyn || false;
 
     // Quality options
-    ucPresetSelect.value = settings.ucPreset || 'heavy';
-    qualityTagsCheckbox.checked = settings.qualityTags !== false; // Default true
+    ucPresetSelect.value = effectiveSettings.ucPreset || 'heavy';
+    qualityTagsCheckbox.checked = effectiveSettings.qualityTags !== false; // Default true
 
     // Update V3 options visibility
     updateV3Options();
@@ -617,15 +830,38 @@ export function init() {
   saveBtn.addEventListener('click', async () => {
     // TTS settings (wrapped — must not abort settings save on failure)
     try {
+      const curTtsVersion = ttsVersionSelect.value;
       await window.sceneVisualizer.ttsSetSettings({
         ttsProvider: ttsProviderSelect.value,
-        ttsNarratorVoice: ttsNarratorVoiceSelect.value,
-        ttsDialogueVoice: ttsDialogueVoiceSelect.value,
+        ttsVersion: curTtsVersion,
+        ttsNarratorVoice: buildVoiceValue(ttsNarratorVoiceSelect, ttsNarratorStyle, ttsNarratorIntonation, ttsNarratorCadence, curTtsVersion, ttsNarratorCustomSeed),
+        ttsDialogueVoice: buildVoiceValue(ttsDialogueVoiceSelect, ttsDialogueStyle, ttsDialogueIntonation, ttsDialogueCadence, curTtsVersion, ttsDialogueCustomSeed),
         ttsSpeed: parseFloat(ttsSpeedSlider.value),
         ttsFirstPerson: ttsFirstPersonCheckbox.checked,
       });
     } catch (e) {
       console.error('[Settings] TTS save error:', e);
+    }
+
+    // Text LLM / Pipeline settings (wrapped — must not abort settings save on failure)
+    try {
+      const textLlmPayload = {
+        pipelineVersion: parseInt(scenePipelineVersion.value),
+        secondaryLlm: sceneSecondaryLlm.value,
+        openaiModel: textLlmOpenaiModel.value.trim() || 'gpt-4o-mini',
+        anthropicModel: textLlmAnthropicModel.value.trim() || 'claude-sonnet-4-20250514',
+      };
+      const openaiKey = textLlmOpenaiKey.value.trim();
+      if (openaiKey) textLlmPayload.openaiApiKey = openaiKey;
+      const anthropicKey = textLlmAnthropicKey.value.trim();
+      if (anthropicKey) textLlmPayload.anthropicApiKey = anthropicKey;
+      await window.sceneVisualizer.textLlmSetSettings(textLlmPayload);
+      // Update Ollama model via lore LLM provider (authoritative store key)
+      if (textLlmOllamaModelSelect.value) {
+        await window.sceneVisualizer.loreSetLlmProvider({ ollamaModel: textLlmOllamaModelSelect.value });
+      }
+    } catch (e) {
+      console.error('[Settings] Text LLM save error:', e);
     }
 
     // Scene settings
@@ -729,6 +965,46 @@ export function init() {
       ucPreset: ucPresetSelect.value,
       qualityTags: qualityTagsCheckbox.checked
     });
+
+    // Save per-story settings (TTS config, image, scene) when a story is active
+    if (state.currentStoryId) {
+      const perStoryTtsVersion = ttsVersionSelect.value;
+      const perStory = {
+        ttsProvider: ttsProviderSelect.value,
+        ttsVersion: perStoryTtsVersion,
+        ttsNarratorVoice: buildVoiceValue(ttsNarratorVoiceSelect, ttsNarratorStyle, ttsNarratorIntonation, ttsNarratorCadence, perStoryTtsVersion, ttsNarratorCustomSeed),
+        ttsDialogueVoice: buildVoiceValue(ttsDialogueVoiceSelect, ttsDialogueStyle, ttsDialogueIntonation, ttsDialogueCadence, perStoryTtsVersion, ttsDialogueCustomSeed),
+        ttsSpeed: parseFloat(ttsSpeedSlider.value),
+        ttsFirstPerson: ttsFirstPersonCheckbox.checked,
+        imageProvider: providerSelect.value,
+        imageSettings: {
+          model: modelSelect.value,
+          width: parseInt(imgWidth.value),
+          height: parseInt(imgHeight.value),
+          sampler: samplerSelect.value,
+          noiseSchedule: noiseScheduleSelect.value,
+          steps: parseInt(stepsInput.value),
+          scale: parseFloat(scaleInput.value),
+          cfgRescale: parseFloat(cfgRescaleSlider.value),
+          smea: smeaCheckbox.checked,
+          smeaDyn: smeaDynCheckbox.checked,
+          ucPreset: ucPresetSelect.value,
+          qualityTags: qualityTagsCheckbox.checked,
+        },
+        novelaiArtStyle: novelaiArtStyleSelect.value,
+        sceneSettings: {
+          autoGeneratePrompts: sceneAutoGenerate.checked,
+          useCharacterLore: sceneUseCharacterLore.checked,
+          artStyleTags: sceneArtStyleTags.value.trim(),
+          minTextChange: parseInt(sceneMinTextChange.value),
+          promptTemperature: parseFloat(scenePromptTemperature.value),
+          suggestionStyle: sceneSuggestionStyle.value,
+          suggestionTemperature: parseFloat(sceneSuggestionTemperature.value),
+        },
+      };
+      await window.sceneVisualizer.storySettingsSet(state.currentStoryId, perStory);
+      state.storySettings = perStory;
+    }
 
     settingsModal.classList.remove('active');
     status.textContent = 'Settings saved';

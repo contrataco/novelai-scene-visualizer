@@ -5,6 +5,10 @@
  * Processes story text in ~2500-char chunks, summarizing each and extracting
  * entity profiles. Provides a comprehension context string that can be
  * injected into lore scan prompts for full-story awareness.
+ *
+ * Supports hybrid parallelism (primary + secondary LLM provider) for chunk
+ * processing, and category-aware entity extraction using the lorebook's
+ * category registry.
  */
 
 const LOG_PREFIX = '[LoreComprehension]';
@@ -18,9 +22,10 @@ const CHUNK_OVERLAP = 200;
 const CONSOLIDATION_INTERVAL = 5;
 const MAX_SUMMARY_LENGTH = 800;
 const MAX_MASTER_SUMMARY = 2000;
-const MAX_ENTITY_PROFILE = 300;
-const MAX_ENTITIES_IN_CONTEXT = 20;
-const SCHEMA_VERSION = 1;
+const MAX_ENTITY_PROFILE = 500;
+const MAX_ENTITIES_IN_CONTEXT = 30;
+const SCHEMA_VERSION = 2;
+const INTER_CALL_DELAY = 500;
 
 // ============================================================================
 // UTILITIES
@@ -142,47 +147,117 @@ function chunkStory(storyText) {
 }
 
 // ============================================================================
+// HYBRID PROVIDER MANAGEMENT
+// ============================================================================
+
+/**
+ * Wraps a secondary LLM provider with auto-fallback.
+ * Same pattern as lore-creator.js createHybridProviders.
+ */
+function createHybridProviders(primaryFn, secondaryFn) {
+  let secondaryAlive = !!secondaryFn;
+  let failCount = 0;
+
+  const wrappedSecondary = async (messages, options) => {
+    if (!secondaryAlive) return primaryFn(messages, options);
+    try {
+      return await secondaryFn(messages, options);
+    } catch (err) {
+      failCount++;
+      console.error(`${LOG_PREFIX} Secondary provider failed (${failCount}x): ${err.message}`);
+      if (failCount >= 2) {
+        secondaryAlive = false;
+        console.log(`${LOG_PREFIX} Secondary provider disabled — falling back to primary only`);
+      }
+      return primaryFn(messages, options);
+    }
+  };
+
+  return {
+    getProviders: () => secondaryAlive ? [primaryFn, wrappedSecondary] : [primaryFn],
+    isHybrid: () => secondaryAlive,
+  };
+}
+
+// ============================================================================
 // LLM FUNCTIONS
 // ============================================================================
 
 /**
+ * Build the category list string for the LLM prompt.
+ * Uses actual category registry when available, falls back to builtins.
+ */
+function buildCategoryList(categories, knownEntries) {
+  const catNames = categories && categories.length > 0
+    ? categories.map(c => c.singularName || c.id).join(', ').toLowerCase()
+    : 'character, location, faction, item, concept';
+
+  const catIds = categories && categories.length > 0
+    ? categories.map(c => c.id)
+    : ['character', 'location', 'item', 'faction', 'concept'];
+
+  return { catNames, catIds };
+}
+
+/**
  * Process a single chunk: summarize and extract entity information.
  * Combined into one LLM call for efficiency.
+ *
+ * Enhanced: category-aware extraction with richer entity profiles.
  */
-async function processChunk(chunkText, previousSummary, entityProfiles, generateTextFn, categories) {
-  const entityContext = Object.keys(entityProfiles).length > 0
-    ? `\nKNOWN ENTITIES: ${Object.keys(entityProfiles).slice(0, 15).join(', ')}`
+async function processChunk(chunkText, previousSummary, entityProfiles, generateTextFn, options = {}) {
+  const { categories, knownEntries } = options;
+  const { catNames, catIds } = buildCategoryList(categories, knownEntries);
+
+  const entityKeys = Object.keys(entityProfiles);
+  const entityContext = entityKeys.length > 0
+    ? `\nKNOWN ENTITIES (track updates to these): ${entityKeys.slice(0, 20).join(', ')}`
     : '';
 
   const previousContext = previousSummary
-    ? `\nSTORY SO FAR: ${previousSummary.slice(0, 500)}`
+    ? `\nSTORY SO FAR: ${previousSummary.slice(0, 600)}`
     : '';
+
+  // Build lorebook hints if we have known entries
+  let lorebookHint = '';
+  if (knownEntries && knownEntries.length > 0) {
+    const entryNames = knownEntries.slice(0, 30).map(e =>
+      `${e.displayName} (${e.category || 'unknown'})`
+    ).join(', ');
+    lorebookHint = `\nLOREBOOK ENTRIES (existing tracked entities): ${entryNames}`;
+  }
+
+  const validCatsLine = `Valid categories: ${catIds.join(', ')}`;
 
   const messages = [
     {
       role: 'system',
-      content: 'You analyze story segments. Summarize the segment AND extract entity information. Output ONLY valid JSON.',
+      content: `You analyze story segments. Summarize the segment AND extract entity information. Categorize entities using ONLY these categories: ${catNames}. Output ONLY valid JSON.`,
     },
     {
       role: 'user',
       content: `Analyze this story segment:
-${previousContext}${entityContext}
+${previousContext}${entityContext}${lorebookHint}
 
 SEGMENT TEXT:
 ${chunkText}
 
 Provide:
 1. A concise summary of events/developments in this segment (2-4 sentences, max ${MAX_SUMMARY_LENGTH} chars)
-2. A list of entities (${categories || 'characters, locations, factions, items, concepts'}) mentioned, with current traits/status
+2. A list of entities (${catNames}) mentioned, with current traits/status
+3. For characters: include role (protagonist/antagonist/ally/neutral/minor), party membership if applicable, and any RPG-relevant stats mentioned (class, level, abilities)
+4. For all entities: track how they relate to other entities in this segment
+
+${validCatsLine}
 
 Output ONLY this JSON:
-{"summary":"Segment summary here.","entities":[{"name":"Entity Name","category":"character","traits":"Brief traits/description","relationships":"Key relationships","status":"Current status/state"}]}`,
+{"summary":"Segment summary here.","entities":[{"name":"Entity Name","category":"character","traits":"Brief current traits/description","relationships":"Key relationships to other entities","status":"Current status/state/condition","role":"protagonist/antagonist/ally/neutral/minor (characters only)","partyMember":false,"rpgData":"class/level/abilities if mentioned (characters only)"}]}`,
     },
   ];
 
   try {
     const response = await generateTextFn(messages, {
-      max_tokens: 500,
+      max_tokens: 600,
       temperature: 0.3,
     });
 
@@ -196,10 +271,13 @@ Output ONLY this JSON:
             .filter(e => typeof e.name === 'string' && e.name.length > 0)
             .map(e => ({
               name: e.name,
-              category: e.category || 'concept',
+              category: catIds.includes(e.category) ? e.category : 'concept',
               traits: typeof e.traits === 'string' ? e.traits : '',
               relationships: typeof e.relationships === 'string' ? e.relationships : '',
               status: typeof e.status === 'string' ? e.status : '',
+              role: typeof e.role === 'string' ? e.role : '',
+              partyMember: !!e.partyMember,
+              rpgData: typeof e.rpgData === 'string' ? e.rpgData : '',
             }))
         : [];
       return { summary, entities };
@@ -212,13 +290,63 @@ Output ONLY this JSON:
 }
 
 /**
- * Consolidate multiple chunk summaries into a single master summary.
+ * Consolidate chunk summaries using hierarchical approach.
+ * Groups summaries in batches, consolidates each batch, then consolidates the results.
  */
-async function consolidateSummaries(chunkSummaries, generateTextFn) {
+async function consolidateSummaries(chunkSummaries, generateTextFn, options = {}) {
   if (chunkSummaries.length === 0) return '';
   if (chunkSummaries.length === 1) return chunkSummaries[0];
 
-  const combined = chunkSummaries
+  const { hybrid } = options;
+  const BATCH_SIZE = 8;
+
+  // If small enough, do single consolidation
+  if (chunkSummaries.length <= BATCH_SIZE) {
+    return _consolidateBatch(chunkSummaries, generateTextFn);
+  }
+
+  // Hierarchical: consolidate in groups, then consolidate the group summaries
+  const groupSummaries = [];
+  for (let i = 0; i < chunkSummaries.length; i += BATCH_SIZE) {
+    const batch = chunkSummaries.slice(i, i + BATCH_SIZE);
+
+    if (hybrid) {
+      // Use hybrid providers for parallel batch consolidation
+      const providers = hybrid.getProviders();
+      if (providers.length > 1 && i + BATCH_SIZE < chunkSummaries.length) {
+        const batch2 = chunkSummaries.slice(i + BATCH_SIZE, i + BATCH_SIZE * 2);
+        if (batch2.length > 0) {
+          const [r1, r2] = await Promise.all([
+            _consolidateBatch(batch, providers[0]),
+            _consolidateBatch(batch2, providers[1]),
+          ]);
+          groupSummaries.push(r1, r2);
+          i += BATCH_SIZE; // skip extra batch (loop will add another BATCH_SIZE)
+          continue;
+        }
+      }
+    }
+
+    const result = await _consolidateBatch(batch, generateTextFn);
+    groupSummaries.push(result);
+    if (groupSummaries.length > 1) await delay(INTER_CALL_DELAY);
+  }
+
+  // If we got multiple group summaries, consolidate them too
+  if (groupSummaries.length > 1) {
+    return _consolidateBatch(groupSummaries, generateTextFn);
+  }
+  return groupSummaries[0] || '';
+}
+
+/**
+ * Consolidate a single batch of summaries into one.
+ */
+async function _consolidateBatch(summaries, generateTextFn) {
+  if (summaries.length === 0) return '';
+  if (summaries.length === 1) return summaries[0];
+
+  const combined = summaries
     .map((s, i) => `[Part ${i + 1}] ${s}`)
     .join('\n');
 
@@ -239,7 +367,7 @@ Write ONLY the consolidated summary:`,
 
   try {
     const response = await generateTextFn(messages, {
-      max_tokens: 400,
+      max_tokens: 500,
       temperature: 0.2,
     });
 
@@ -250,7 +378,7 @@ Write ONLY the consolidated summary:`,
   }
 
   // Fallback: concatenate and truncate
-  return chunkSummaries.join(' ').slice(0, MAX_MASTER_SUMMARY);
+  return summaries.join(' ').slice(0, MAX_MASTER_SUMMARY);
 }
 
 // ============================================================================
@@ -258,7 +386,8 @@ Write ONLY the consolidated summary:`,
 // ============================================================================
 
 /**
- * Merge extracted entity data into existing profile. Pure function.
+ * Merge extracted entity data into existing profile.
+ * Enhanced: preserves structured fields (role, rpgData, partyMember).
  */
 function mergeEntityProfile(existing, extracted, chunkIndex) {
   if (!existing) {
@@ -267,7 +396,12 @@ function mergeEntityProfile(existing, extracted, chunkIndex) {
       traits: (extracted.traits || '').slice(0, MAX_ENTITY_PROFILE),
       relationships: (extracted.relationships || '').slice(0, MAX_ENTITY_PROFILE),
       status: (extracted.status || '').slice(0, MAX_ENTITY_PROFILE),
+      role: extracted.role || '',
+      partyMember: !!extracted.partyMember,
+      rpgData: (extracted.rpgData || '').slice(0, MAX_ENTITY_PROFILE),
       lastChunkIndex: chunkIndex,
+      firstSeen: chunkIndex,
+      mentionCount: 1,
     };
   }
 
@@ -279,8 +413,19 @@ function mergeEntityProfile(existing, extracted, chunkIndex) {
     relationships: extracted.relationships
       ? mergeProfileField(existing.relationships, extracted.relationships)
       : existing.relationships,
+    // Status: newer always wins (it's the current state)
     status: extracted.status || existing.status,
+    // Role: update only if newly extracted (don't clear)
+    role: extracted.role || existing.role,
+    // Party membership: sticky true (once in party, stays unless explicitly removed)
+    partyMember: extracted.partyMember || existing.partyMember,
+    // RPG data: merge (keep old stats, update with new)
+    rpgData: extracted.rpgData
+      ? mergeProfileField(existing.rpgData, extracted.rpgData)
+      : existing.rpgData || '',
     lastChunkIndex: chunkIndex,
+    firstSeen: existing.firstSeen ?? chunkIndex,
+    mentionCount: (existing.mentionCount || 1) + 1,
   };
 }
 
@@ -306,7 +451,8 @@ function mergeProfileField(oldVal, newVal) {
 
 /**
  * Build the comprehension context string for injection into scan prompts.
- * Caps total output at ~2500 chars.
+ * Enhanced: richer entity output with role, RPG data, mention frequency.
+ * Caps total output at ~3000 chars.
  */
 function formatComprehensionContext(masterSummary, entityProfiles) {
   if (!masterSummary && (!entityProfiles || Object.keys(entityProfiles).length === 0)) {
@@ -321,20 +467,33 @@ function formatComprehensionContext(masterSummary, entityProfiles) {
 
   if (entityProfiles && Object.keys(entityProfiles).length > 0) {
     context += 'KEY ENTITIES:\n';
+
+    // Sort by mention count (descending), then by recency
     const entries = Object.entries(entityProfiles)
-      .sort((a, b) => (b[1].lastChunkIndex || 0) - (a[1].lastChunkIndex || 0))
+      .sort((a, b) => {
+        const countDiff = (b[1].mentionCount || 1) - (a[1].mentionCount || 1);
+        if (countDiff !== 0) return countDiff;
+        return (b[1].lastChunkIndex || 0) - (a[1].lastChunkIndex || 0);
+      })
       .slice(0, MAX_ENTITIES_IN_CONTEXT);
 
     for (const [name, profile] of entries) {
-      const parts = [profile.traits, profile.relationships, profile.status]
-        .filter(p => p && p.length > 0);
-      const detail = parts.join('; ').slice(0, 120);
+      const parts = [];
+
+      if (profile.traits) parts.push(profile.traits);
+      if (profile.role) parts.push(`role: ${profile.role}`);
+      if (profile.partyMember) parts.push('party member');
+      if (profile.rpgData) parts.push(profile.rpgData);
+      if (profile.relationships) parts.push(`relationships: ${profile.relationships}`);
+      if (profile.status) parts.push(`status: ${profile.status}`);
+
+      const detail = parts.join('; ').slice(0, 280);
       context += `- ${name} (${profile.category}): ${detail}\n`;
     }
     context += '\n';
   }
 
-  return context.slice(0, 2500);
+  return context.slice(0, 4000);
 }
 
 // ============================================================================
@@ -356,17 +515,42 @@ function createEmptyState() {
 }
 
 /**
- * Process unprocessed chunks one at a time with cancel/pause support.
+ * Migrate v1 state to v2 (add new entity profile fields).
+ */
+function migrateState(state) {
+  if (!state || state.version === SCHEMA_VERSION) return state;
+  if (!state.entityProfiles) return state;
+
+  // Add new fields with defaults to existing profiles
+  for (const [, profile] of Object.entries(state.entityProfiles)) {
+    if (profile.role === undefined) profile.role = '';
+    if (profile.partyMember === undefined) profile.partyMember = false;
+    if (profile.rpgData === undefined) profile.rpgData = '';
+    if (profile.firstSeen === undefined) profile.firstSeen = profile.lastChunkIndex || 0;
+    if (profile.mentionCount === undefined) profile.mentionCount = 1;
+  }
+
+  state.version = SCHEMA_VERSION;
+  return state;
+}
+
+/**
+ * Process unprocessed chunks with hybrid parallelism and cancel/pause support.
  *
  * @param {string} storyText - Full story text
  * @param {object|null} existingState - Previous comprehension state (or null)
- * @param {function} generateTextFn - LLM call function
+ * @param {function} generateTextFn - Primary LLM call function
  * @param {function} [onProgress] - Progress callback
  * @param {function} [shouldCancel] - Return true to stop processing
+ * @param {object} [options] - { secondaryGenerateTextFn, categories, knownEntries }
  * @returns {object} Updated comprehension state
  */
-async function runProgressiveScan(storyText, existingState, generateTextFn, onProgress, shouldCancel) {
-  const state = existingState ? JSON.parse(JSON.stringify(existingState)) : createEmptyState();
+async function runProgressiveScan(storyText, existingState, generateTextFn, onProgress, shouldCancel, options = {}) {
+  const { secondaryGenerateTextFn, categories, knownEntries } = options;
+
+  const state = existingState
+    ? migrateState(JSON.parse(JSON.stringify(existingState)))
+    : createEmptyState();
   state.totalStoryLength = storyText.length;
 
   const allChunks = chunkStory(storyText);
@@ -374,11 +558,14 @@ async function runProgressiveScan(storyText, existingState, generateTextFn, onPr
 
   if (totalChunks === 0) return state;
 
+  // Set up hybrid providers
+  const hybrid = createHybridProviders(generateTextFn, secondaryGenerateTextFn);
+
   // Determine which chunks are already processed (by hash match)
   const processedHashes = new Set(state.chunks.map(c => c.hash));
   const unprocessed = allChunks.filter(c => !processedHashes.has(c.hash));
 
-  console.log(`${LOG_PREFIX} Progressive scan: ${totalChunks} total chunks, ${unprocessed.length} to process`);
+  console.log(`${LOG_PREFIX} Progressive scan: ${totalChunks} total chunks, ${unprocessed.length} to process${hybrid.isHybrid() ? ' (hybrid parallel)' : ''}`);
 
   if (unprocessed.length === 0) {
     if (onProgress) onProgress({ phase: 'complete', chunksProcessed: totalChunks, chunksTotal: totalChunks });
@@ -387,8 +574,9 @@ async function runProgressiveScan(storyText, existingState, generateTextFn, onPr
 
   let processed = totalChunks - unprocessed.length;
   let chunksThisRound = 0;
+  const chunkOptions = { categories, knownEntries };
 
-  for (const chunk of unprocessed) {
+  for (let i = 0; i < unprocessed.length;) {
     // Check cancellation
     if (shouldCancel && shouldCancel()) {
       console.log(`${LOG_PREFIX} Progressive scan cancelled at chunk ${processed}/${totalChunks}`);
@@ -408,29 +596,45 @@ async function runProgressiveScan(storyText, existingState, generateTextFn, onPr
       ? state.chunks[state.chunks.length - 1].summary
       : '');
 
-    const result = await processChunk(chunk.text, previousSummary, state.entityProfiles, generateTextFn);
+    // Batch chunks using hybrid providers
+    const providers = hybrid.getProviders();
+    const batch = unprocessed.slice(i, i + providers.length);
+    const promises = batch.map((chunk, idx) =>
+      processChunk(chunk.text, previousSummary, state.entityProfiles, providers[idx], chunkOptions)
+        .then(result => ({ chunk, result }))
+        .catch(err => {
+          console.error(`${LOG_PREFIX} Chunk ${chunk.index} failed:`, err.message);
+          return { chunk, result: { summary: '', entities: [] } };
+        })
+    );
+    i += providers.length;
 
-    // Store chunk summary
-    state.chunks.push({
-      index: chunk.index,
-      hash: chunk.hash,
-      summary: result.summary,
-    });
+    const results = await Promise.all(promises);
 
-    // Update entity profiles
-    for (const entity of result.entities) {
-      const key = entity.name;
-      state.entityProfiles[key] = mergeEntityProfile(
-        state.entityProfiles[key],
-        entity,
-        chunk.index
-      );
+    // Process results in order (important for sequential chunk indices)
+    for (const { chunk, result } of results) {
+      // Store chunk summary
+      state.chunks.push({
+        index: chunk.index,
+        hash: chunk.hash,
+        summary: result.summary,
+      });
+
+      // Update entity profiles
+      for (const entity of result.entities) {
+        const key = entity.name;
+        state.entityProfiles[key] = mergeEntityProfile(
+          state.entityProfiles[key],
+          entity,
+          chunk.index
+        );
+      }
+
+      processed++;
+      chunksThisRound++;
     }
 
-    processed++;
-    chunksThisRound++;
-
-    // Consolidate summaries periodically
+    // Consolidate summaries periodically (hierarchical)
     if (chunksThisRound % CONSOLIDATION_INTERVAL === 0 || processed === totalChunks) {
       if (onProgress) {
         onProgress({
@@ -441,12 +645,12 @@ async function runProgressiveScan(storyText, existingState, generateTextFn, onPr
       }
 
       const summaries = state.chunks.map(c => c.summary).filter(s => s.length > 0);
-      state.masterSummary = await consolidateSummaries(summaries, generateTextFn);
+      state.masterSummary = await consolidateSummaries(summaries, generateTextFn, { hybrid });
     }
 
-    // Brief delay between chunks to avoid rate limiting
-    if (processed < totalChunks) {
-      await delay(500);
+    // Brief delay between batches to avoid rate limiting
+    if (i < unprocessed.length) {
+      await delay(INTER_CALL_DELAY);
     }
   }
 
@@ -469,13 +673,16 @@ async function runProgressiveScan(storyText, existingState, generateTextFn, onPr
 /**
  * Process only new text since lastProcessedLength.
  * Quick path for ongoing story writing (typically 1-2 new chunks).
+ * Supports hybrid parallelism for multiple new chunks.
  */
-async function incrementalUpdate(storyText, existingState, generateTextFn) {
+async function incrementalUpdate(storyText, existingState, generateTextFn, options = {}) {
   if (!existingState || !existingState.lastProcessedLength) {
-    return runProgressiveScan(storyText, null, generateTextFn);
+    return runProgressiveScan(storyText, null, generateTextFn, null, null, options);
   }
 
-  const state = JSON.parse(JSON.stringify(existingState));
+  const { secondaryGenerateTextFn, categories, knownEntries } = options;
+
+  const state = migrateState(JSON.parse(JSON.stringify(existingState)));
   const oldLength = state.lastProcessedLength;
 
   if (storyText.length <= oldLength) {
@@ -490,34 +697,54 @@ async function incrementalUpdate(storyText, existingState, generateTextFn) {
   console.log(`${LOG_PREFIX} Incremental update: ${newChunks.length} new chunks from ${storyText.length - oldLength} new chars`);
 
   const processedHashes = new Set(state.chunks.map(c => c.hash));
+  const toProcess = newChunks.filter(c => !processedHashes.has(c.hash));
 
-  for (const chunk of newChunks) {
-    if (processedHashes.has(chunk.hash)) continue;
+  if (toProcess.length === 0) return state;
 
+  // Set up hybrid for incremental too
+  const hybrid = createHybridProviders(generateTextFn, secondaryGenerateTextFn);
+  const chunkOptions = { categories, knownEntries };
+
+  for (let i = 0; i < toProcess.length;) {
     const previousSummary = state.masterSummary || '';
-    const result = await processChunk(chunk.text, previousSummary, state.entityProfiles, generateTextFn);
+    const providers = hybrid.getProviders();
+    const batch = toProcess.slice(i, i + providers.length);
 
-    const newIndex = state.chunks.length;
-    state.chunks.push({
-      index: newIndex,
-      hash: chunk.hash,
-      summary: result.summary,
-    });
+    const promises = batch.map((chunk, idx) =>
+      processChunk(chunk.text, previousSummary, state.entityProfiles, providers[idx], chunkOptions)
+        .then(result => ({ chunk, result }))
+        .catch(err => {
+          console.error(`${LOG_PREFIX} Incremental chunk failed:`, err.message);
+          return { chunk, result: { summary: '', entities: [] } };
+        })
+    );
+    i += providers.length;
 
-    for (const entity of result.entities) {
-      state.entityProfiles[entity.name] = mergeEntityProfile(
-        state.entityProfiles[entity.name],
-        entity,
-        newIndex
-      );
+    const results = await Promise.all(promises);
+
+    for (const { chunk, result } of results) {
+      const newIndex = state.chunks.length;
+      state.chunks.push({
+        index: newIndex,
+        hash: chunk.hash,
+        summary: result.summary,
+      });
+
+      for (const entity of result.entities) {
+        state.entityProfiles[entity.name] = mergeEntityProfile(
+          state.entityProfiles[entity.name],
+          entity,
+          newIndex
+        );
+      }
     }
 
-    await delay(500);
+    if (i < toProcess.length) await delay(INTER_CALL_DELAY);
   }
 
-  // Consolidate after incremental update
+  // Consolidate after incremental update (hierarchical)
   const summaries = state.chunks.map(c => c.summary).filter(s => s.length > 0);
-  state.masterSummary = await consolidateSummaries(summaries, generateTextFn);
+  state.masterSummary = await consolidateSummaries(summaries, generateTextFn, { hybrid });
 
   state.lastProcessedLength = storyText.length;
   state.totalStoryLength = storyText.length;
@@ -550,6 +777,10 @@ module.exports = {
   runProgressiveScan,
   incrementalUpdate,
   createEmptyState,
+  migrateState,
+
+  // Hybrid
+  createHybridProviders,
 
   // Constants
   CHUNK_SIZE,
@@ -560,4 +791,5 @@ module.exports = {
   MAX_ENTITY_PROFILE,
   MAX_ENTITIES_IN_CONTEXT,
   SCHEMA_VERSION,
+  INTER_CALL_DELAY,
 };

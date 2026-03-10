@@ -80,4 +80,7 @@ export const state = {
 
   // TTS state (per-story character voice map)
   ttsState: null,
+
+  // Per-story settings (TTS config, image settings, scene settings)
+  storySettings: null,
 };

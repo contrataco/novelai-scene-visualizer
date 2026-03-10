@@ -352,7 +352,18 @@ module.exports = {
     }));
   },
 
-  async generate(prompt, negativePrompt, store) {
+  getNegativeSuffix(store) {
+    const artStyleId = store.get('perchanceArtStyle') || 'no-style';
+    const artStyle = ART_STYLES[artStyleId] || ART_STYLES['no-style'];
+    const styleNegative = artStyle.negative || '';
+    return {
+      styleNegative,
+      ucPresetNegative: '',
+      combined: styleNegative,
+    };
+  },
+
+  async generate(prompt, negativePrompt, store, options = {}) {
     let userKey = store.get('perchanceUserKey');
     if (!userKey) {
       console.log('[Perchance] No stored key, attempting extraction...');
@@ -380,8 +391,13 @@ module.exports = {
     const artStyle = ART_STYLES[artStyleId] || ART_STYLES['no-style'];
 
     const finalPrompt = prompt + artStyle.prompt;
-    const styleNegative = artStyle.negative;
-    const finalNegative = [negativePrompt, styleNegative].filter(Boolean).join(', ');
+    let finalNegative;
+    if (options && options.rawNegativePrompt) {
+      finalNegative = negativePrompt || '';
+    } else {
+      const styleNegative = artStyle.negative;
+      finalNegative = [negativePrompt, styleNegative].filter(Boolean).join(', ');
+    }
 
     const width = Math.min(settings.width || 512, MAX_DIMENSION);
     const height = Math.min(settings.height || 768, MAX_DIMENSION);

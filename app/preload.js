@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
 
   // NovelAI art styles
   getNovelaiArtStyles: () => ipcRenderer.invoke('get-novelai-art-styles'),
-  getNovelaiArtStyle: () => ipcRenderer.invoke('get-novelai-art-style'),
+  getNovelaiArtStyle: (storyId) => ipcRenderer.invoke('get-novelai-art-style', storyId),
   setNovelaiArtStyle: (styleId) => ipcRenderer.invoke('set-novelai-art-style', styleId),
 
   // Perchance
@@ -94,6 +94,8 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
 
   // Prompt suffix (art style + quality tags the provider appends)
   getPromptSuffix: () => ipcRenderer.invoke('get-prompt-suffix'),
+  // Negative prompt suffix (art style negative + UC preset the provider appends)
+  getNegativePromptSuffix: () => ipcRenderer.invoke('get-negative-prompt-suffix'),
 
   // Electron-side suggestion generation (parallel with script's image prompt)
   generateSuggestionsDirect: (data) => ipcRenderer.invoke('generate-suggestions-direct', data),
@@ -104,6 +106,10 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   // Per-story bulk load (SQLite)
   storyLoadAll: (storyId, storyTitle) =>
     ipcRenderer.invoke('story:load-all', { storyId, storyTitle }),
+
+  // Per-story settings
+  storySettingsGet: (storyId) => ipcRenderer.invoke('story-settings:get', storyId),
+  storySettingsSet: (storyId, settings) => ipcRenderer.invoke('story-settings:set', { storyId, settings }),
 
   // Per-story scene state persistence
   sceneGetState: (storyId) => ipcRenderer.invoke('scene:get-state', storyId),
@@ -146,8 +152,8 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   },
 
   // Lore Comprehension (progressive scan)
-  loreStartProgressiveScan: (storyId, storyText) =>
-    ipcRenderer.invoke('lore:start-progressive-scan', { storyId, storyText }),
+  loreStartProgressiveScan: (storyId, storyText, existingEntries) =>
+    ipcRenderer.invoke('lore:start-progressive-scan', { storyId, storyText, existingEntries }),
   lorePauseProgressiveScan: (storyId) =>
     ipcRenderer.invoke('lore:pause-progressive-scan', { storyId }),
   loreResumeProgressiveScan: (storyId) =>
@@ -156,8 +162,8 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
     ipcRenderer.invoke('lore:cancel-progressive-scan', { storyId }),
   loreGetComprehension: (storyId) =>
     ipcRenderer.invoke('lore:get-comprehension', storyId),
-  loreIncrementalUpdate: (storyId, storyText) =>
-    ipcRenderer.invoke('lore:incremental-update', { storyId, storyText }),
+  loreIncrementalUpdate: (storyId, storyText, existingEntries) =>
+    ipcRenderer.invoke('lore:incremental-update', { storyId, storyText, existingEntries }),
   onProgressiveScanProgress: (callback) => {
     ipcRenderer.on('lore:progressive-scan-progress', (event, data) => callback(data));
   },
@@ -258,6 +264,16 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   mediaGetCount: (storyId) =>
     ipcRenderer.invoke('media:get-count', { storyId }),
 
+  // Text LLM Providers
+  textLlmGetSettings: () => ipcRenderer.invoke('text-llm:get-settings'),
+  textLlmSetSettings: (settings) => ipcRenderer.invoke('text-llm:set-settings', settings),
+  textLlmListProviders: () => ipcRenderer.invoke('text-llm:list-providers'),
+  textLlmListOllamaModels: () => ipcRenderer.invoke('text-llm:list-ollama-models'),
+
+  // Visual Profiles
+  visualProfilesGet: (storyId) => ipcRenderer.invoke('visual-profiles:get', storyId),
+  visualProfilesReset: (storyId) => ipcRenderer.invoke('visual-profiles:reset', storyId),
+
   // Portrait Manager
   portraitGenerate: (storyId, characterId, characterEntry, rpgData) =>
     ipcRenderer.invoke('portrait:generate', { storyId, characterId, characterEntry, rpgData }),
@@ -267,4 +283,14 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
     ipcRenderer.invoke('portrait:get', { storyId, characterId, thumbnail }),
   portraitDelete: (storyId, characterId) =>
     ipcRenderer.invoke('portrait:delete', { storyId, characterId }),
+
+  // Portrait Album
+  portraitAlbumList: (storyId, characterId) =>
+    ipcRenderer.invoke('portrait:album-list', { storyId, characterId }),
+  portraitAlbumGet: (storyId, characterId, imageId) =>
+    ipcRenderer.invoke('portrait:album-get', { storyId, characterId, imageId }),
+  portraitAlbumDelete: (storyId, characterId, imageId) =>
+    ipcRenderer.invoke('portrait:album-delete', { storyId, characterId, imageId }),
+  portraitAlbumSetActive: (storyId, characterId, imageId) =>
+    ipcRenderer.invoke('portrait:album-set-active', { storyId, characterId, imageId }),
 });

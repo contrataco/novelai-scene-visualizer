@@ -8,6 +8,7 @@ export const imagePanel = document.getElementById('imagePanel');
 export const imageContainer = document.getElementById('imageContainer');
 export const loadingIndicator = document.getElementById('loadingIndicator');
 export const promptDisplay = document.getElementById('promptDisplay');
+export const negativePromptDisplay = document.getElementById('negativePromptDisplay');
 
 // Buttons
 export const generateBtn = document.getElementById('generateBtn');
@@ -89,6 +90,15 @@ export const sceneSuggestionStyle = document.getElementById('sceneSuggestionStyl
 export const sceneSuggestionTemperature = document.getElementById('sceneSuggestionTemperature');
 export const sceneSuggestionTemperatureValue = document.getElementById('sceneSuggestionTemperatureValue');
 export const sceneEnableLitrpg = document.getElementById('sceneEnableLitrpg');
+
+// Text LLM / Pipeline settings elements
+export const scenePipelineVersion = document.getElementById('scenePipelineVersion');
+export const sceneSecondaryLlm = document.getElementById('sceneSecondaryLlm');
+export const textLlmOpenaiKey = document.getElementById('textLlmOpenaiKey');
+export const textLlmOpenaiModel = document.getElementById('textLlmOpenaiModel');
+export const textLlmAnthropicKey = document.getElementById('textLlmAnthropicKey');
+export const textLlmAnthropicModel = document.getElementById('textLlmAnthropicModel');
+export const textLlmOllamaModelSelect = document.getElementById('textLlmOllamaModelSelect');
 
 // NovelAI token status elements
 export const novelaiTokenDot = document.getElementById('novelaiTokenDot');
@@ -303,6 +313,8 @@ export const ttsNarrateBtn = document.getElementById('ttsNarrateBtn');
 export const ttsStopBtn = document.getElementById('ttsStopBtn');
 export const ttsProgress = document.getElementById('ttsProgress');
 export const ttsProviderSelect = document.getElementById('ttsProvider');
+export const ttsVersionSelect = document.getElementById('ttsVersion');
+export const ttsVersionGroup = document.getElementById('ttsVersionGroup');
 export const ttsNarratorVoiceSelect = document.getElementById('ttsNarratorVoice');
 export const ttsDialogueVoiceSelect = document.getElementById('ttsDialogueVoice');
 export const ttsSpeedSlider = document.getElementById('ttsSpeed');
@@ -312,11 +324,25 @@ export const ttsVoiceMap = document.getElementById('ttsVoiceMap');
 export const ttsVoiceList = document.getElementById('ttsVoiceList');
 export const ttsVoiceCount = document.getElementById('ttsVoiceCount');
 export const ttsAutoAssignBtn = document.getElementById('ttsAutoAssignBtn');
+export const ttsPanelAddName = document.getElementById('ttsPanelAddName');
+export const ttsPanelAddBtn = document.getElementById('ttsPanelAddBtn');
 export const ttsSettingsVoiceList = document.getElementById('ttsSettingsVoiceList');
 export const ttsSettingsVoiceCount = document.getElementById('ttsSettingsVoiceCount');
 export const ttsAddCharName = document.getElementById('ttsAddCharName');
 export const ttsAddCharVoice = document.getElementById('ttsAddCharVoice');
 export const ttsAddCharBtn = document.getElementById('ttsAddCharBtn');
+// TTS v2 advanced fields
+export const ttsV2NarratorGroup = document.getElementById('ttsV2NarratorGroup');
+export const ttsV2DialogueGroup = document.getElementById('ttsV2DialogueGroup');
+export const ttsNarratorStyle = document.getElementById('ttsNarratorStyle');
+export const ttsNarratorIntonation = document.getElementById('ttsNarratorIntonation');
+export const ttsNarratorCadence = document.getElementById('ttsNarratorCadence');
+export const ttsDialogueStyle = document.getElementById('ttsDialogueStyle');
+export const ttsDialogueIntonation = document.getElementById('ttsDialogueIntonation');
+export const ttsDialogueCadence = document.getElementById('ttsDialogueCadence');
+export const ttsNarratorCustomSeed = document.getElementById('ttsNarratorCustomSeed');
+export const ttsDialogueCustomSeed = document.getElementById('ttsDialogueCustomSeed');
+export const ttsAddCharCustomSeed = document.getElementById('ttsAddCharCustomSeed');
 
 // Media Gallery elements
 export const mediaTab = document.getElementById('mediaTab');

@@ -3,7 +3,7 @@
 import { state, bus } from './state.js';
 import {
   webview, status,
-  storyIndicator, promptDisplay, commitSbName, commitStoryLabel,
+  storyIndicator, promptDisplay, negativePromptDisplay, commitSbName, commitStoryLabel,
 } from './dom-refs.js';
 import { showToast } from './utils.js';
 import { renderSuggestions, updateBadge } from './suggestions.js';
@@ -140,6 +140,7 @@ async function handleStoryContextChange(storyId, storyTitle) {
       state.currentNegativePrompt = ss.lastNegativePrompt || '';
       state.lastKnownStoryLength = ss.lastStoryLength || 0;
       promptDisplay.value = state.currentPrompt;
+      if (negativePromptDisplay) negativePromptDisplay.value = state.currentNegativePrompt;
       if (ss.suggestions && ss.suggestions.length > 0) {
         state.currentSuggestions = ss.suggestions;
         renderSuggestions(ss.suggestions);
@@ -151,6 +152,7 @@ async function handleStoryContextChange(storyId, storyTitle) {
       state.currentNegativePrompt = '';
       state.lastKnownStoryLength = 0;
       promptDisplay.value = '';
+      if (negativePromptDisplay) negativePromptDisplay.value = '';
       state.currentSuggestions = [];
       renderSuggestions([]);
       updateBadge(0);
@@ -186,6 +188,9 @@ async function handleStoryContextChange(storyId, storyTitle) {
 
     // Eagerly restore TTS state (per-story character voice map)
     state.ttsState = allData.ttsState || { characterVoices: {} };
+
+    // Eagerly restore per-story settings (TTS config, image, scene)
+    state.storySettings = allData.storySettings || null;
 
     console.log('[Renderer] Eagerly loaded all data for story:', storyId);
   } catch (e) {

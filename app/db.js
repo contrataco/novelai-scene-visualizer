@@ -63,6 +63,12 @@ function createTables() {
       updated_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS story_settings (
+      story_id TEXT PRIMARY KEY REFERENCES stories(id),
+      data TEXT NOT NULL DEFAULT '{}',
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS media_items (
       id TEXT PRIMARY KEY,
       story_id TEXT NOT NULL,
@@ -79,6 +85,14 @@ function createTables() {
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_media_story ON media_items(story_id, type, created_at);
+
+    CREATE TABLE IF NOT EXISTS visual_profiles (
+      story_id TEXT NOT NULL,
+      character_name TEXT NOT NULL,
+      data TEXT NOT NULL DEFAULT '{}',
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (story_id, character_name)
+    );
 
     CREATE TABLE IF NOT EXISTS migrations (
       version INTEGER PRIMARY KEY,
@@ -111,7 +125,7 @@ function listStories() {
 
 // --- Generic per-story CRUD ---
 
-const VALID_TABLES = new Set(['scene_state', 'lore_state', 'lore_comprehension', 'memory_state', 'litrpg_state', 'tts_state']);
+const VALID_TABLES = new Set(['scene_state', 'lore_state', 'lore_comprehension', 'memory_state', 'litrpg_state', 'tts_state', 'story_settings']);
 
 function getData(table, storyId) {
   if (!VALID_TABLES.has(table)) throw new Error(`Invalid table: ${table}`);
@@ -193,6 +207,14 @@ function setTtsState(storyId, data) {
   setData('tts_state', storyId, data);
 }
 
+function getStorySettings(storyId) {
+  return getData('story_settings', storyId);
+}
+
+function setStorySettings(storyId, data) {
+  setData('story_settings', storyId, data);
+}
+
 // --- Bulk load (used on story switch) ---
 
 function loadAllStoryData(storyId) {
@@ -203,6 +225,7 @@ function loadAllStoryData(storyId) {
     memoryState: getMemoryState(storyId),
     litrpgState: getLitrpgState(storyId),
     ttsState: getTtsState(storyId),
+    storySettings: getStorySettings(storyId),
   };
 }
 
@@ -241,6 +264,27 @@ function migrateFromStore(store) {
   migrate();
 }
 
+// --- Visual Profiles ---
+
+function getVisualProfiles(storyId) {
+  const rows = db.prepare('SELECT character_name, data FROM visual_profiles WHERE story_id = ?').all(storyId);
+  const profiles = {};
+  for (const row of rows) {
+    try { profiles[row.character_name] = JSON.parse(row.data); } catch { /* skip corrupt */ }
+  }
+  return profiles;
+}
+
+function setVisualProfile(storyId, characterName, data) {
+  upsertStory(storyId, '');
+  db.prepare(`INSERT OR REPLACE INTO visual_profiles (story_id, character_name, data, updated_at) VALUES (?, ?, ?, ?)`)
+    .run(storyId, characterName, JSON.stringify(data), Date.now());
+}
+
+function resetVisualProfiles(storyId) {
+  db.prepare('DELETE FROM visual_profiles WHERE story_id = ?').run(storyId);
+}
+
 function close() {
   if (db) {
     console.log(`${LOG_PREFIX} Closing database`);
@@ -258,5 +302,7 @@ module.exports = {
   getMemoryState, setMemoryState,
   getLitrpgState, setLitrpgState, LITRPG_STATE_DEFAULTS,
   getTtsState, setTtsState, TTS_STATE_DEFAULTS,
+  getStorySettings, setStorySettings,
+  getVisualProfiles, setVisualProfile, resetVisualProfiles,
   loadAllStoryData, migrateFromStore,
 };

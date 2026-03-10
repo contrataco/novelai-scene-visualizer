@@ -238,6 +238,7 @@ async function openLightbox(item) {
 
     if (deleteBtn) {
       deleteBtn.addEventListener('click', async () => {
+        if (!confirm('Delete this item from gallery?')) return;
         try {
           await window.sceneVisualizer.mediaDelete(state.currentStoryId, item.id);
           closeLightbox();

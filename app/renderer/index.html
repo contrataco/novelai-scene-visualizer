@@ -391,6 +391,17 @@
       overflow: hidden;
       position: relative;
       white-space: pre-wrap;
+      cursor: pointer;
+      transition: max-height 0.2s ease;
+    }
+
+    .lore-card-text:not(.expanded)::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 24px;
+      background: linear-gradient(transparent, var(--bg-elevated));
+      pointer-events: none;
     }
 
     .lore-card-text.expanded {
@@ -969,6 +980,14 @@
       font-size: 11px;
       color: var(--text-dim);
       margin-bottom: 8px;
+    }
+
+    .neg-prompt-label {
+      margin-top: 8px;
+    }
+
+    .neg-prompt-display {
+      max-height: 100px;
     }
 
     /* Suggestions Popover */
@@ -1566,6 +1585,44 @@
       line-height: 1;
     }
     .tts-voice-row .tts-voice-remove:hover { color: var(--error-soft); }
+    .tts-voice-row .tts-voice-preview {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 11px;
+      padding: 0 2px;
+      line-height: 1;
+    }
+    .tts-voice-row .tts-voice-preview:hover { color: var(--accent); }
+    .tts-voice-row .tts-voice-preview:disabled { opacity: 0.4; cursor: default; }
+    .tts-group-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 4px 0 2px;
+      border-top: 1px solid var(--border-subtle);
+      margin-top: 4px;
+    }
+    .tts-group-label:first-child { border-top: none; margin-top: 0; }
+    .tts-add-character {
+      display: flex;
+      gap: 4px;
+      padding: 0 8px 4px;
+    }
+    .tts-add-character input {
+      flex: 1;
+      font-size: 11px;
+      padding: 3px 6px;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 3px;
+      outline: none;
+    }
+    .tts-add-character input::placeholder { color: var(--text-muted); }
     .tts-voice-actions {
       display: flex;
       gap: 4px;
@@ -2722,6 +2779,10 @@
           <button id="regenPromptBtn" class="regen-prompt-btn" title="Regenerate prompt from current story text">&#x21bb;</button>
         </div>
         <textarea class="prompt-display" id="promptDisplay" placeholder="No prompt yet. The NovelAI script will generate prompts as you write." rows="4"></textarea>
+        <div class="prompt-label neg-prompt-label">
+          Negative Prompt: <span class="prompt-edited-indicator" id="negPromptEditedIndicator">(edited)</span>
+        </div>
+        <textarea class="prompt-display neg-prompt-display" id="negativePromptDisplay" placeholder="Negative prompt (populated from style preset + UC preset)" rows="2"></textarea>
         <button id="sidebarGenerateBtn" class="sidebar-generate-btn">Generate Image</button>
 
         <!-- TTS Controls -->
@@ -2734,6 +2795,10 @@
         <details class="tts-voice-map" id="ttsVoiceMap">
           <summary>Character Voices <span id="ttsVoiceCount">(0)</span></summary>
           <div class="tts-voice-list" id="ttsVoiceList"></div>
+          <div class="tts-add-character">
+            <input type="text" id="ttsPanelAddName" placeholder="Character name..." />
+            <button class="btn-sm" id="ttsPanelAddBtn">+</button>
+          </div>
           <div class="tts-voice-actions" style="padding:0 8px 8px;">
             <button class="btn-sm" id="ttsAutoAssignBtn">Auto-assign from Lore</button>
           </div>
@@ -3248,6 +3313,61 @@
         </div>
       </details>
 
+      <!-- Text LLM & Pipeline Settings -->
+      <details class="settings-section">
+        <summary><h3 style="display:inline">Text LLM</h3></summary>
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">
+          Configure LLM providers for lore scanning, comprehension, and scene analysis.
+          The primary provider is set in Lore settings. These are additional text-only providers.
+        </div>
+        <div class="form-group">
+          <label>Scene Pipeline Mode</label>
+          <select id="scenePipelineVersion">
+            <option value="1">Classic (single LLM call)</option>
+            <option value="2">Enhanced (multi-stage analysis)</option>
+          </select>
+          <div style="font-size:10px;color:var(--text-dim);margin-top:4px;">Enhanced mode uses parallel LLM calls for richer scene prompts with character visual profiles.</div>
+        </div>
+        <div class="form-group">
+          <label>Secondary LLM (for parallel pipeline)</label>
+          <select id="sceneSecondaryLlm">
+            <option value="none">None (sequential only)</option>
+            <option value="novelai">NovelAI (GLM-4-6)</option>
+            <option value="ollama">Ollama (Local)</option>
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+          </select>
+          <div style="font-size:10px;color:var(--text-dim);margin-top:4px;">When set, Stage 1a and 1b run on different providers simultaneously.</div>
+        </div>
+        <hr style="border-color:var(--border-default);margin:12px 0;">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">External Provider API Keys</div>
+        <div class="form-group">
+          <label>OpenAI API Key</label>
+          <input type="password" id="textLlmOpenaiKey" placeholder="sk-..." style="font-size:12px;">
+        </div>
+        <div class="form-group">
+          <label>OpenAI Model</label>
+          <input type="text" id="textLlmOpenaiModel" placeholder="gpt-4o-mini" style="font-size:12px;">
+        </div>
+        <div class="form-group">
+          <label>Anthropic API Key</label>
+          <input type="password" id="textLlmAnthropicKey" placeholder="sk-ant-..." style="font-size:12px;">
+        </div>
+        <div class="form-group">
+          <label>Anthropic Model</label>
+          <input type="text" id="textLlmAnthropicModel" placeholder="claude-sonnet-4-20250514" style="font-size:12px;">
+        </div>
+        <hr style="border-color:var(--border-default);margin:12px 0;">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">Ollama Settings</div>
+        <div class="form-group">
+          <label>Ollama Model</label>
+          <select id="textLlmOllamaModelSelect">
+            <option value="">Detecting...</option>
+          </select>
+          <div style="font-size:10px;color:var(--text-dim);margin-top:4px;">Auto-detected from local Ollama server.</div>
+        </div>
+      </details>
+
       <!-- Provider Selection -->
       <div class="settings-section">
         <h3>Provider</h3>
@@ -3549,13 +3669,44 @@
             <option value="venice">Venice AI</option>
           </select>
         </div>
+        <div class="form-group" id="ttsVersionGroup">
+          <label>TTS Version</label>
+          <select id="ttsVersion">
+            <option value="auto">Auto (detect from voice)</option>
+            <option value="v2">v2 (force)</option>
+            <option value="v1">v1 (force)</option>
+          </select>
+          <small style="display:block;color:var(--text-dim);font-size:11px;margin-top:2px;">Auto detects v1/v2 from the selected voice preset. Custom seeds default to v2.</small>
+        </div>
         <div class="form-group">
           <label>Narrator Voice</label>
           <select id="ttsNarratorVoice"></select>
+          <input type="text" id="ttsNarratorCustomSeed" placeholder="Enter custom seed (e.g. Maria, seedmix:Aini+Orea)" style="display:none;font-size:11px;margin-top:4px;width:100%;">
+        </div>
+        <div id="ttsV2NarratorGroup" style="display:none;margin-top:4px;">
+          <details style="margin:0;">
+            <summary style="font-size:11px;color:var(--text-muted);cursor:pointer;">Advanced v2 voice control</summary>
+            <div style="display:flex;gap:4px;margin-top:4px;">
+              <div style="flex:1;"><label style="font-size:10px;color:var(--text-dim);">Style</label><input type="text" id="ttsNarratorStyle" style="width:100%;font-size:11px;" placeholder="e.g. Aini"></div>
+              <div style="flex:1;"><label style="font-size:10px;color:var(--text-dim);">Intonation</label><input type="text" id="ttsNarratorIntonation" style="width:100%;font-size:11px;" placeholder="e.g. Orea"></div>
+              <div style="flex:1;"><label style="font-size:10px;color:var(--text-dim);">Cadence</label><input type="text" id="ttsNarratorCadence" style="width:100%;font-size:11px;" placeholder="e.g. Claea"></div>
+            </div>
+          </details>
         </div>
         <div class="form-group">
           <label>Dialogue Voice</label>
           <select id="ttsDialogueVoice"></select>
+          <input type="text" id="ttsDialogueCustomSeed" placeholder="Enter custom seed (e.g. Max, seedmix:Aulon+Oyn)" style="display:none;font-size:11px;margin-top:4px;width:100%;">
+        </div>
+        <div id="ttsV2DialogueGroup" style="display:none;margin-top:4px;">
+          <details style="margin:0;">
+            <summary style="font-size:11px;color:var(--text-muted);cursor:pointer;">Advanced v2 voice control</summary>
+            <div style="display:flex;gap:4px;margin-top:4px;">
+              <div style="flex:1;"><label style="font-size:10px;color:var(--text-dim);">Style</label><input type="text" id="ttsDialogueStyle" style="width:100%;font-size:11px;" placeholder="e.g. Aulon"></div>
+              <div style="flex:1;"><label style="font-size:10px;color:var(--text-dim);">Intonation</label><input type="text" id="ttsDialogueIntonation" style="width:100%;font-size:11px;" placeholder="e.g. Oyn"></div>
+              <div style="flex:1;"><label style="font-size:10px;color:var(--text-dim);">Cadence</label><input type="text" id="ttsDialogueCadence" style="width:100%;font-size:11px;" placeholder="e.g. Naia"></div>
+            </div>
+          </details>
         </div>
         <div class="form-group" id="ttsSpeedGroup" style="display:none;">
           <label>Speed: <span id="ttsSpeedValue">1.0</span>x</label>
@@ -3572,6 +3723,7 @@
           <div style="display:flex;gap:4px;align-items:center;">
             <input type="text" id="ttsAddCharName" placeholder="Character name" style="flex:1;font-size:11px;">
             <select id="ttsAddCharVoice" style="flex:1;font-size:11px;"></select>
+            <input type="text" id="ttsAddCharCustomSeed" placeholder="Custom seed" style="flex:1;font-size:11px;display:none;">
             <button class="btn-sm" id="ttsAddCharBtn" style="font-size:11px;padding:4px 8px;background:var(--bg-elevated);border:1px solid var(--border-default);color:var(--text-secondary);border-radius:3px;cursor:pointer;">Add</button>
           </div>
         </div>

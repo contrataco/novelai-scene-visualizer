@@ -160,6 +160,23 @@ module.exports = {
     };
   },
 
+  // Compute the negative prompt suffix (art style negative + UC preset) for preview.
+  getNegativeSuffix(store) {
+    const settings = store.get('imageSettings') || {};
+    const model = settings.model || 'nai-diffusion-4-5-full';
+    const artStyleId = store.get('novelaiArtStyle') || 'no-style';
+    const artStyle = ART_STYLES[artStyleId] || ART_STYLES['no-style'];
+    const ucPresets = UC_PRESETS[model] || UC_PRESETS['nai-diffusion-4-curated-preview'];
+    const ucPreset = settings.ucPreset || 'heavy';
+    const baseNegative = ucPresets[ucPreset] || ucPresets.heavy;
+    const styleNegative = artStyle.negative || '';
+    return {
+      styleNegative,
+      ucPresetNegative: baseNegative || '',
+      combined: [styleNegative, baseNegative].filter(Boolean).join(', '),
+    };
+  },
+
   async generate(prompt, negativePrompt, store, options = {}) {
     const apiToken = store.get('apiToken');
     if (!apiToken) {
@@ -175,13 +192,18 @@ module.exports = {
     const artStyleId = store.get('novelaiArtStyle') || 'no-style';
     const artStyle = ART_STYLES[artStyleId] || ART_STYLES['no-style'];
 
-    // Get UC preset for model
-    const ucPresets = UC_PRESETS[model] || UC_PRESETS['nai-diffusion-4-curated-preview'];
-    const ucPreset = settings.ucPreset || 'heavy';
-    const baseNegative = ucPresets[ucPreset] || ucPresets.heavy;
-    const styleNegative = artStyle.negative;
-    const negParts = [negativePrompt, styleNegative, baseNegative].filter(Boolean);
-    const finalNegative = negParts.join(', ');
+    // Build negative prompt — skip combining if rawNegativePrompt (already baked in)
+    let finalNegative;
+    if (options.rawNegativePrompt) {
+      finalNegative = negativePrompt || '';
+    } else {
+      const ucPresets = UC_PRESETS[model] || UC_PRESETS['nai-diffusion-4-curated-preview'];
+      const ucPreset = settings.ucPreset || 'heavy';
+      const baseNegative = ucPresets[ucPreset] || ucPresets.heavy;
+      const styleNegative = artStyle.negative;
+      const negParts = [negativePrompt, styleNegative, baseNegative].filter(Boolean);
+      finalNegative = negParts.join(', ');
+    }
 
     // Get quality tags for model — skip if rawPrompt (tags already baked into prompt)
     let finalPrompt;
@@ -314,28 +336,41 @@ module.exports = {
     const maxTokens = options.max_tokens || 300;
     const temperature = options.temperature || 0.6;
 
-    const response = await fetch('https://text.novelai.net/oa/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        max_tokens: maxTokens,
-        temperature,
-        stream: true,
-      }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+
+    let response;
+    try {
+      response = await fetch('https://text.novelai.net/oa/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: maxTokens,
+          temperature,
+          stream: true,
+        }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timeout);
+      if (err.name === 'AbortError') throw new Error('NovelAI text API timed out after 60s');
+      throw err;
+    }
 
     if (!response.ok) {
+      clearTimeout(timeout);
       const text = await response.text();
       throw new Error(`NovelAI text API error ${response.status}: ${text}`);
     }
 
     // Read SSE stream and accumulate text from delta.content
     const rawText = await response.text();
+    clearTimeout(timeout);
     let fullText = '';
     const lines = rawText.split('\n');
     for (const line of lines) {
@@ -359,15 +394,87 @@ module.exports = {
   // Text-to-Speech
   // ---------------------------------------------------------------------------
 
+  // V1 preset seeds (legacy TTS)
+  V1_VOICES: ['Aini', 'Orea', 'Claea', 'Liedka', 'Aulon', 'Oyn', 'Naia', 'Aurae', 'Zaia', 'Zyre', 'Ligeia', 'Anthe'],
+  // V2 preset seeds (newer TTS with style/intonation/cadence)
+  V2_VOICES: ['Cyllene', 'Leucosia', 'Crina', 'Hespe', 'Ida', 'Alseid', 'Daphnis', 'Echo', 'Thel', 'Nomios'],
+  // Set for fast lookup
+  _v1Set: null,
+  _v2Set: null,
+  getV1Set() { if (!this._v1Set) this._v1Set = new Set(this.V1_VOICES); return this._v1Set; },
+  getV2Set() { if (!this._v2Set) this._v2Set = new Set(this.V2_VOICES); return this._v2Set; },
+
+  /**
+   * Returns all voice presets grouped by version, plus a custom option.
+   * Each voice: { id, name, version: 'v1'|'v2', category: 'novelai' }
+   */
   getVoiceSeeds() {
-    return ['Aini', 'Orea', 'Claea', 'Liedka', 'Aulon', 'Oyn', 'Naia', 'Aurae', 'Zaia', 'Zyre', 'Ligeia', 'Anthe'];
+    const voices = [];
+    for (const s of this.V2_VOICES) {
+      voices.push({ id: s, name: s, version: 'v2', category: 'novelai' });
+    }
+    for (const s of this.V1_VOICES) {
+      voices.push({ id: s, name: s, version: 'v1', category: 'novelai' });
+    }
+    return voices;
   },
 
-  async generateSpeech(text, seed, store) {
+  /**
+   * Determine the best TTS version for a voice value.
+   * v2 objects always use v2. Known v2 presets use v2. Known v1 presets use v1.
+   * Unknown seeds (custom) use the provided default or 'v2'.
+   */
+  detectVoiceVersion(voice, defaultVersion = 'v2') {
+    if (voice && typeof voice === 'object' && voice.v === 2) return 'v2';
+    if (typeof voice === 'string') {
+      if (this.getV2Set().has(voice)) return 'v2';
+      if (this.getV1Set().has(voice)) return 'v1';
+    }
+    return defaultVersion;
+  },
+
+  /**
+   * Normalize a voice config (string preset or v2 object) into URL params.
+   * If ttsVersion is 'auto' (default), auto-detects from the voice value.
+   * @param {string|object} voice — preset name string or { v: 2, style, intonation, cadence }
+   * @param {string} ttsVersion — 'v1', 'v2', or 'auto' (default 'auto')
+   * @returns {object} key-value pairs for URLSearchParams
+   */
+  normalizeVoiceConfig(voice, ttsVersion = 'auto') {
+    // v2 object voice: { v: 2, style, intonation, cadence }
+    if (voice && typeof voice === 'object' && voice.v === 2) {
+      return {
+        voice: '-1',
+        opus: 'false',
+        version: 'v2',
+        style: voice.style || 'Cyllene',
+        intonation: voice.intonation || voice.style || 'Cyllene',
+        cadence: voice.cadence || voice.style || 'Cyllene',
+      };
+    }
+    // String preset — auto-detect or use explicit version
+    const seed = voice || 'Cyllene';
+    const resolvedVersion = ttsVersion === 'auto' ? this.detectVoiceVersion(seed) : ttsVersion;
+    if (resolvedVersion === 'v2') {
+      return {
+        voice: '-1',
+        opus: 'false',
+        version: 'v2',
+        style: seed,
+        intonation: seed,
+        cadence: seed,
+      };
+    }
+    // v1
+    return { seed, voice: '-1', opus: 'false', version: 'v1' };
+  },
+
+  async generateSpeech(text, voice, store, ttsVersion) {
     const token = store.get('apiToken');
     if (!token) throw new Error('No API token configured.');
 
-    const params = new URLSearchParams({ text, seed, voice: '-1', opus: 'false', version: 'v1' });
+    const voiceParams = this.normalizeVoiceConfig(voice, ttsVersion || 'auto');
+    const params = new URLSearchParams({ text, ...voiceParams });
     const res = await fetch(`https://api.novelai.net/ai/generate-voice?${params}`, {
       headers: { 'Authorization': `Bearer ${token}` },
     });

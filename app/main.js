@@ -12,9 +12,12 @@ const novelaiProvider = require('./providers/novelai');
 const perchanceProvider = require('./providers/perchance');
 const veniceProvider = require('./providers/venice');
 const puterProvider = require('./providers/puter');
+const openaiTextProvider = require('./providers/openai-text');
+const anthropicTextProvider = require('./providers/anthropic-text');
 const { extractPerchanceKey, verifyPerchanceKey } = require('./perchance-key');
 const storyboard = require('./storyboard');
 const loreCreator = require('./lore-creator');
+const scenePromptPipeline = require('./scene-prompt-pipeline');
 const loreComprehension = require('./lore-comprehension');
 const memoryManager = require('./memory-manager');
 const litrpgTracker = require('./litrpg-tracker');
@@ -27,6 +30,14 @@ const PROVIDERS = {
   [perchanceProvider.id]: perchanceProvider,
   [veniceProvider.id]: veniceProvider,
   [puterProvider.id]: puterProvider,
+};
+
+// Text-only LLM providers (for lore, comprehension, scene analysis, etc.)
+const TEXT_PROVIDERS = {
+  novelai: { id: 'novelai', name: 'NovelAI (GLM-4-6)' },
+  ollama: { id: 'ollama', name: 'Ollama (Local)' },
+  openai: { id: 'openai', name: 'OpenAI', provider: openaiTextProvider },
+  anthropic: { id: 'anthropic', name: 'Anthropic', provider: anthropicTextProvider },
 };
 
 // Secure storage for API token and settings
@@ -90,12 +101,16 @@ const store = new Store({
     memorySettings: { type: 'object', default: {} },
     memoryState: { type: 'object', default: {} },
     ttsProvider: { type: 'string', default: 'novelai' },
-    ttsNarratorVoice: { type: 'string', default: 'Ligeia' },
-    ttsDialogueVoice: { type: 'string', default: 'Aulon' },
+    ttsNarratorVoice: { type: 'string', default: 'Cyllene' },
+    ttsDialogueVoice: { type: 'string', default: 'Alseid' },
     ttsSpeed: { type: 'number', default: 1.0 },
     ttsFirstPerson: { type: 'boolean', default: false },
   }
 });
+
+function getOllamaUrl() {
+  return (store.get('loreOllamaUrl') || 'http://localhost:11434').replace('localhost', '127.0.0.1');
+}
 
 function getActiveProvider() {
   const id = store.get('provider') || 'novelai';
@@ -381,7 +396,33 @@ ipcMain.handle('get-prompt-suffix', () => {
   return { artStyleSuffix: '', qualitySuffix: '', combined: '' };
 });
 
-ipcMain.handle('generate-image', async (event, { prompt, negativePrompt, rawPrompt }) => {
+ipcMain.handle('get-negative-prompt-suffix', () => {
+  const provider = getActiveProvider();
+  if (provider.getNegativeSuffix) {
+    return provider.getNegativeSuffix(store);
+  }
+  return { styleNegative: '', ucPresetNegative: '', combined: '' };
+});
+
+ipcMain.handle('generate-image', async (event, { prompt, negativePrompt, rawPrompt, rawNegativePrompt, storyId }) => {
+  // Apply per-story settings temporarily for this generation
+  const ss = storyId ? db.getStorySettings(storyId) : null;
+  const savedStoreValues = {};
+  if (ss) {
+    const overrides = {
+      provider: ss.imageProvider,
+      imageSettings: ss.imageSettings,
+      novelaiArtStyle: ss.novelaiArtStyle,
+    };
+    for (const [k, v] of Object.entries(overrides)) {
+      if (v !== undefined) { savedStoreValues[k] = store.get(k); store.set(k, v); }
+    }
+  }
+  const restoreStore = () => {
+    for (const [k, v] of Object.entries(savedStoreValues)) store.set(k, v);
+  };
+
+  try {
   const provider = getActiveProvider();
   const providerId = store.get('provider') || 'novelai';
   const settings = store.get('imageSettings');
@@ -401,7 +442,10 @@ ipcMain.handle('generate-image', async (event, { prompt, negativePrompt, rawProm
     }
   };
 
-  const genOpts = rawPrompt ? { rawPrompt: true } : {};
+  const genOpts = {
+    ...(rawPrompt ? { rawPrompt: true } : {}),
+    ...(rawNegativePrompt ? { rawNegativePrompt: true } : {}),
+  };
   let lastError = null;
 
   // --- Attempt 1: normal generation ---
@@ -475,6 +519,9 @@ ipcMain.handle('generate-image', async (event, { prompt, negativePrompt, rawProm
     error: lastError?.message || 'Image generation failed (blank image detected)',
     blankDetected: !lastError,
   };
+  } finally {
+    restoreStore();
+  }
 });
 
 // IPC Handlers — Models (delegates to active provider)
@@ -554,7 +601,11 @@ ipcMain.handle('get-novelai-art-styles', () => {
   return novelaiProvider.getArtStyles();
 });
 
-ipcMain.handle('get-novelai-art-style', () => {
+ipcMain.handle('get-novelai-art-style', (event, storyId) => {
+  if (storyId) {
+    const ss = db.getStorySettings(storyId);
+    if (ss?.novelaiArtStyle) return ss.novelaiArtStyle;
+  }
   return store.get('novelaiArtStyle') || 'no-style';
 });
 
@@ -663,13 +714,17 @@ const FIRST_PERSON_VERBS = /\bI\s+(?:said|replied|whispered|shouted|muttered|spo
 
 // Speaker attribution patterns for TTS character voice mapping
 const SPEECH_VERBS = '(?:said|replied|whispered|shouted|muttered|spoke|asked|answered|called|yelled|cried|exclaimed|declared|announced|mentioned|added|continued|began|started|finished|growled|hissed|purred|sighed|murmured|snapped|demanded|pleaded|insisted|warned|laughed|chuckled|groaned)';
-const NAME_PATTERN = '([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){0,2})';
+// Name pattern: supports O'Brien, Jean-Pierre, d'Artagnan-style names
+const NAME_PATTERN = "([A-Z][a-z]+(?:['-][A-Z]?[a-z]+)*(?:\\s+[A-Z][a-z]+(?:['-][A-Z]?[a-z]+)*){0,2})";
 // "..." said CharName  (verb before name)
 const AFTER_VERB_NAME = new RegExp(`^\\s*,?\\s*${SPEECH_VERBS}\\s+${NAME_PATTERN}`, 'i');
 // "..." CharName said   (name before verb)
 const AFTER_NAME_VERB = new RegExp(`^\\s*,?\\s*${NAME_PATTERN}\\s+${SPEECH_VERBS}`, 'i');
 // CharName said, "..."  /  CharName: "..."
 const BEFORE_ATTR = new RegExp(`${NAME_PATTERN}\\s+${SPEECH_VERBS}\\s*,?\\s*$|${NAME_PATTERN}\\s*:\\s*$`, 'i');
+// Em-dash attribution: "..." — said CharName  or  "..." — CharName said
+const AFTER_DASH_VERB = new RegExp(`^\\s*[\u2014—]\\s*${SPEECH_VERBS}\\s+${NAME_PATTERN}`, 'i');
+const AFTER_DASH_NAME = new RegExp(`^\\s*[\u2014—]\\s*${NAME_PATTERN}\\s+${SPEECH_VERBS}`, 'i');
 
 /**
  * Parse text into narration vs dialogue segments for TTS voice assignment.
@@ -703,6 +758,14 @@ function extractSpeaker(text, matchIndex, matchEnd, characterVoices) {
   const afterNV = AFTER_NAME_VERB.exec(afterText);
   if (afterNV && afterNV[1]) return afterNV[1].trim();
 
+  // Check after em-dash: "..." — said CharName
+  const afterDV = AFTER_DASH_VERB.exec(afterText);
+  if (afterDV && afterDV[1]) return afterDV[1].trim();
+
+  // Check after em-dash: "..." — CharName said
+  const afterDN = AFTER_DASH_NAME.exec(afterText);
+  if (afterDN && afterDN[1]) return afterDN[1].trim();
+
   // Check before: CharName said, "..."  or  CharName: "..."
   const beforeStart = Math.max(0, matchIndex - 80);
   const beforeText = text.slice(beforeStart, matchIndex);
@@ -710,6 +773,25 @@ function extractSpeaker(text, matchIndex, matchEnd, characterVoices) {
   if (beforeMatch) {
     const name = (beforeMatch[1] || beforeMatch[2] || '').trim();
     if (name) return name;
+  }
+
+  // Action-based attribution: preceding sentence contains a known character name
+  // Handles: Varian slammed his fist. "How dare you!"
+  if (characterVoices && Object.keys(characterVoices).length > 0) {
+    const lookbackText = text.slice(Math.max(0, matchIndex - 200), matchIndex);
+    const lastSentenceEnd = Math.max(lookbackText.lastIndexOf('.'), lookbackText.lastIndexOf('!'), lookbackText.lastIndexOf('?'));
+    if (lastSentenceEnd >= 0) {
+      const sentence = lookbackText.slice(lastSentenceEnd + 1).toLowerCase().trim();
+      if (sentence.length > 0 && sentence.length < 150) {
+        for (const charName of Object.keys(characterVoices)) {
+          if (sentence.includes(charName.toLowerCase())) return charName;
+          const words = charName.split(/\s+/).filter(w => w.length >= 3);
+          for (const word of words) {
+            if (sentence.includes(word.toLowerCase())) return charName;
+          }
+        }
+      }
+    }
   }
 
   // Fallback: search nearby text for any known character name from voice map
@@ -730,16 +812,22 @@ function extractSpeaker(text, matchIndex, matchEnd, characterVoices) {
 
 function parseTextForTTS(text, firstPerson, characterVoices, protagonistName) {
   const segments = [];
-  // Match quoted dialogue (double or single quotes, including curly quotes)
-  const regex = /[\u201C""]([^"\u201D"]+)[\u201D""]|'([^']+)'/g;
+  // Match quoted dialogue: double quotes (straight + curly), curly single quotes with word boundaries
+  // Excludes straight single quotes to avoid false positives from contractions/possessives
+  const regex = /[\u201C\u201F""]([^"\u201C\u201D\u201F""]+)[\u201D""]|(?<!\w)\u2018([^\u2019]+)\u2019(?!\w)/g;
   let lastIndex = 0;
   let match;
+  let lastSpeaker = null;
 
   while ((match = regex.exec(text)) !== null) {
     // Add narration before this dialogue
-    if (match.index > lastIndex) {
+    const hasNarrationGap = match.index > lastIndex;
+    if (hasNarrationGap) {
       const narration = text.slice(lastIndex, match.index).trim();
-      if (narration) segments.push({ type: 'narration', text: narration, speaker: null, isProtagonist: false });
+      if (narration) {
+        segments.push({ type: 'narration', text: narration, speaker: null, isProtagonist: false });
+        lastSpeaker = null; // Reset on narration gap
+      }
     }
 
     const dialogue = match[1] || match[2];
@@ -757,11 +845,19 @@ function parseTextForTTS(text, firstPerson, characterVoices, protagonistName) {
       speaker = extractSpeaker(text, match.index, regex.lastIndex, characterVoices);
     }
 
+    // Consecutive dialogue inheritance: if no speaker found and no narration gap, inherit last speaker
+    if (!isProtagonist && !speaker && lastSpeaker && !hasNarrationGap) {
+      speaker = lastSpeaker;
+    }
+
     if (!isProtagonist && speaker && protagonistName) {
       if (loreCreator.fuzzyNameScore(speaker, protagonistName) >= 0.7) {
         isProtagonist = true;
       }
     }
+
+    // Track last speaker for consecutive dialogue
+    if (speaker) lastSpeaker = speaker;
 
     segments.push({ type: 'dialogue', text: dialogue, speaker, isProtagonist });
     lastIndex = regex.lastIndex;
@@ -787,6 +883,7 @@ ipcMain.handle('tts:get-settings', () => ({
   ttsDialogueVoice: store.get('ttsDialogueVoice'),
   ttsSpeed: store.get('ttsSpeed'),
   ttsFirstPerson: store.get('ttsFirstPerson'),
+  ttsVersion: store.get('ttsVersion') || 'auto',
 }));
 
 ipcMain.handle('tts:set-settings', (_, settings) => {
@@ -799,20 +896,23 @@ ipcMain.handle('tts:set-settings', (_, settings) => {
 ipcMain.handle('tts:get-voices', () => {
   const provider = store.get('ttsProvider');
   if (provider === 'venice') return veniceProvider.getVoices();
-  return novelaiProvider.getVoiceSeeds().map(s => ({ id: s, name: s }));
+  return novelaiProvider.getVoiceSeeds();
 });
 
-ipcMain.handle('tts:generate-speech', async (_, { text, voice }) => {
-  const provider = store.get('ttsProvider');
+ipcMain.handle('tts:generate-speech', async (_, { text, voice, storyId }) => {
+  const ss = storyId ? db.getStorySettings(storyId) : null;
+  const provider = ss?.ttsProvider || store.get('ttsProvider');
   if (provider === 'venice') return veniceProvider.generateSpeech(text, voice, store);
-  return novelaiProvider.generateSpeech(text, voice, store);
+  // Auto-detect TTS version from voice preset; falls back to stored preference
+  return novelaiProvider.generateSpeech(text, voice, store, 'auto');
 });
 
 ipcMain.handle('tts:narrate-scene', async (_, { text, storyId, protagonistName }) => {
-  const provider = store.get('ttsProvider');
-  const narratorVoice = store.get('ttsNarratorVoice');
-  const dialogueVoice = store.get('ttsDialogueVoice');
-  const firstPerson = store.get('ttsFirstPerson');
+  const ss = storyId ? db.getStorySettings(storyId) : null;
+  const provider = ss?.ttsProvider || store.get('ttsProvider');
+  const narratorVoice = ss?.ttsNarratorVoice || store.get('ttsNarratorVoice');
+  const dialogueVoice = ss?.ttsDialogueVoice || store.get('ttsDialogueVoice');
+  const firstPerson = ss?.ttsFirstPerson ?? store.get('ttsFirstPerson');
   const ttsState = storyId ? db.getTtsState(storyId) : { characterVoices: {} };
   const characterVoices = ttsState.characterVoices || {};
   const segments = parseTextForTTS(text, firstPerson, characterVoices, protagonistName);
@@ -828,10 +928,11 @@ ipcMain.handle('tts:narrate-scene', async (_, { text, storyId, protagonistName }
     } else {
       voice = dialogueVoice;
     }
-    const genFn = provider === 'venice'
-      ? veniceProvider.generateSpeech.bind(veniceProvider)
-      : novelaiProvider.generateSpeech.bind(novelaiProvider);
-    const audio = await genFn(seg.text, voice, store);
+    const isVenice = provider === 'venice';
+    // Auto-detect TTS version from the voice preset
+    const audio = isVenice
+      ? await veniceProvider.generateSpeech(seg.text, voice, store)
+      : await novelaiProvider.generateSpeech(seg.text, voice, store, 'auto');
     results.push({ type: seg.type, text: seg.text, speaker: seg.speaker, isProtagonist: seg.isProtagonist, ...audio });
   }
 
@@ -879,6 +980,42 @@ ipcMain.handle('set-image-settings', (event, settings) => {
   return { success: true };
 });
 
+// ---------------------------------------------------------------------------
+// Per-Story Settings (snapshot-on-first-visit from globals)
+// ---------------------------------------------------------------------------
+
+function snapshotGlobalSettings() {
+  return {
+    ttsProvider: store.get('ttsProvider'),
+    ttsNarratorVoice: store.get('ttsNarratorVoice'),
+    ttsDialogueVoice: store.get('ttsDialogueVoice'),
+    ttsSpeed: store.get('ttsSpeed'),
+    ttsFirstPerson: store.get('ttsFirstPerson'),
+    imageProvider: store.get('provider') || 'novelai',
+    imageSettings: store.get('imageSettings'),
+    novelaiArtStyle: store.get('novelaiArtStyle') || 'no-style',
+    sceneSettings: store.get('sceneSettings') || {},
+  };
+}
+
+function getStorySettingsOrSnapshot(storyId) {
+  let settings = db.getStorySettings(storyId);
+  if (!settings) {
+    settings = snapshotGlobalSettings();
+    db.setStorySettings(storyId, settings);
+  }
+  return settings;
+}
+
+ipcMain.handle('story-settings:get', (_, storyId) => {
+  return getStorySettingsOrSnapshot(storyId);
+});
+
+ipcMain.handle('story-settings:set', (_, { storyId, settings }) => {
+  db.setStorySettings(storyId, settings);
+  return { success: true };
+});
+
 // Scene settings (prompt generation, suggestions)
 const SCENE_SETTINGS_DEFAULTS = {
   autoGeneratePrompts: true,
@@ -895,7 +1032,8 @@ ipcMain.handle('get-scene-settings', () => {
 });
 
 ipcMain.handle('set-scene-settings', (event, settings) => {
-  store.set('sceneSettings', settings);
+  const existing = store.get('sceneSettings') || {};
+  store.set('sceneSettings', { ...existing, ...settings });
   return { success: true };
 });
 
@@ -915,7 +1053,8 @@ ipcMain.handle('generate-suggestions-direct', async (event, data) => {
     }
 
     const provider = PROVIDERS.novelai;
-    const sceneSettings = { ...SCENE_SETTINGS_DEFAULTS, ...store.get('sceneSettings') };
+    const ss2 = storyId ? db.getStorySettings(storyId) : null;
+    const sceneSettings = { ...SCENE_SETTINGS_DEFAULTS, ...store.get('sceneSettings'), ...(ss2?.sceneSettings || {}) };
     const narrativeBlock = narrativeContext
       ? `\nNARRATIVE CONTEXT:\n${narrativeContext}\n\nUse established characters, situations, and relationships.`
       : '';
@@ -1000,11 +1139,78 @@ Types: "action" for physical actions, "dialogue" for speech, "narrative" for des
   }
 });
 
-// IPC Handler — Electron-side scene prompt generation (replaces script sandbox)
+// IPC Handler — Electron-side scene prompt generation (v1 classic + v2 enhanced pipeline)
 ipcMain.handle('generate-scene-prompt', async (event, { storyText, entries, artStyle, storyId }) => {
   try {
+    const ss = storyId ? db.getStorySettings(storyId) : null;
+    const sceneSettings = { ...SCENE_SETTINGS_DEFAULTS, ...store.get('sceneSettings'), ...(ss?.sceneSettings || {}) };
+    const pipelineVersion = sceneSettings.pipelineVersion || 1;
+
+    // Resolve art style (shared by v1 and v2)
     const provider = PROVIDERS.novelai;
-    const sceneSettings = { ...SCENE_SETTINGS_DEFAULTS, ...store.get('sceneSettings') };
+    const artStyleId = ss?.novelaiArtStyle || store.get('novelaiArtStyle') || 'no-style';
+    const resolvedArtStyle = provider.getArtStyleTags(artStyleId);
+    const customTags = sceneSettings.artStyleTags || '';
+    const style = (customTags && provider.getArtStyleTags(customTags)) || customTags || resolvedArtStyle || 'anime style, detailed, high quality';
+
+    // Build narrative context (shared)
+    const narrativeContext = storyId
+      ? buildUnifiedContext(storyId, { comprehension: true, memory: true, budget: 2000 })
+      : '';
+
+    // --- V2 Enhanced Pipeline ---
+    if (pipelineVersion === 2) {
+      console.log('[Main] Using v2 enhanced pipeline');
+      const primaryProvider = store.get('loreLlmProvider') || 'novelai';
+      const secondaryProvider = sceneSettings.secondaryLlm || 'none';
+
+      const primaryGenFn = makeGenerateTextFn(primaryProvider);
+      let secondaryGenFn = null;
+
+      if (secondaryProvider !== 'none' && secondaryProvider !== primaryProvider) {
+        secondaryGenFn = makeGenerateTextFn(secondaryProvider);
+      }
+
+      // Force sequential if both are novelai (429 guard)
+      const forceSequential = primaryProvider === 'novelai' && secondaryProvider === 'novelai';
+
+      // Gather RPG data if available
+      let rpgData = null;
+      if (storyId) {
+        const litrpgState = db.getLitrpgState(storyId);
+        if (litrpgState?.enabled && litrpgState?.characters) {
+          rpgData = litrpgState;
+        }
+      }
+
+      // Get stored visual profiles
+      const visualProfiles = storyId ? db.getVisualProfiles(storyId) : {};
+
+      const result = await scenePromptPipeline.generateScenePromptV2({
+        storyText, entries, artStyle: style, storyId,
+        primaryGenerateTextFn: primaryGenFn,
+        secondaryGenerateTextFn: secondaryGenFn,
+        narrativeContext, rpgData, visualProfiles,
+        forceSequential,
+      });
+
+      // Persist updated visual profiles
+      if (result.success && result.updatedProfiles && storyId) {
+        for (const [charName, profile] of Object.entries(result.updatedProfiles)) {
+          db.setVisualProfile(storyId, charName, profile);
+        }
+      }
+
+      // If v2 failed completely, fall through to v1
+      if (!result.success) {
+        console.warn('[Main] v2 pipeline failed, falling back to v1:', result.error);
+      } else {
+        return result;
+      }
+    }
+
+    // --- V1 Classic Pipeline ---
+    console.log('[Main] Using v1 classic pipeline');
 
     // 1. Extract character appearances from lorebook entries (skip if disabled)
     const appearancePatterns = [
@@ -1057,12 +1263,6 @@ ipcMain.handle('generate-scene-prompt', async (event, { storyText, entries, artS
     }
 
     // 4. Build system prompt
-    // Priority: custom artStyleTags > provider art style (resolved from ID) > fallback
-    const artStyleId = store.get('novelaiArtStyle') || 'no-style';
-    const resolvedArtStyle = provider.getArtStyleTags(artStyleId);
-    const customTags = sceneSettings.artStyleTags || '';
-    // If custom tags match a style ID, resolve to the full tag string
-    const style = (customTags && provider.getArtStyleTags(customTags)) || customTags || resolvedArtStyle || 'anime style, detailed, high quality';
     console.log(`[Main] Scene prompt style: artStyleId=${artStyleId}, customTags="${customTags}", resolved="${resolvedArtStyle}", final="${style}"`);
     let systemContent = `You are an expert at creating image generation prompts. Analyze story text and create a vivid visual prompt that captures the current scene.
 
@@ -1083,10 +1283,6 @@ Guidelines:
       systemContent += '\n\nIMPORTANT: Use the provided Character References for accurate character appearances. Include their visual details (hair color, eye color, clothing, etc.) in the prompt when they appear in the scene.';
     }
 
-    // Inject narrative context from comprehension + memory
-    const narrativeContext = storyId
-      ? buildUnifiedContext(storyId, { comprehension: true, memory: true, budget: 2000 })
-      : '';
     if (narrativeContext) {
       systemContent += `\n\nNARRATIVE CONTEXT (use for scene understanding):\n${narrativeContext}`;
       console.log(`[Main] Scene prompt: injecting narrative context (${narrativeContext.length} chars)`);
@@ -1161,6 +1357,71 @@ ipcMain.handle('scene:set-state', (event, { storyId, state }) => {
 });
 
 // ---------------------------------------------------------------------------
+// Text LLM Provider Settings
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('text-llm:get-settings', () => {
+  return {
+    openaiApiKey: store.get('openaiApiKey') ? '••••' : '',
+    openaiModel: store.get('openaiModel') || openaiTextProvider.defaultModel,
+    anthropicApiKey: store.get('anthropicApiKey') ? '••••' : '',
+    anthropicModel: store.get('anthropicModel') || anthropicTextProvider.defaultModel,
+    secondaryLlm: store.get('sceneSettings')?.secondaryLlm || 'none',
+    pipelineVersion: store.get('sceneSettings')?.pipelineVersion || 1,
+  };
+});
+
+ipcMain.handle('text-llm:set-settings', (event, settings) => {
+  if (settings.openaiApiKey && settings.openaiApiKey !== '••••') {
+    store.set('openaiApiKey', settings.openaiApiKey);
+  }
+  if (settings.openaiModel !== undefined) store.set('openaiModel', settings.openaiModel);
+  if (settings.anthropicApiKey && settings.anthropicApiKey !== '••••') {
+    store.set('anthropicApiKey', settings.anthropicApiKey);
+  }
+  if (settings.anthropicModel !== undefined) store.set('anthropicModel', settings.anthropicModel);
+  // secondaryLlm and pipelineVersion are saved as part of sceneSettings
+  if (settings.secondaryLlm !== undefined || settings.pipelineVersion !== undefined) {
+    const sceneSettings = store.get('sceneSettings') || {};
+    if (settings.secondaryLlm !== undefined) sceneSettings.secondaryLlm = settings.secondaryLlm;
+    if (settings.pipelineVersion !== undefined) sceneSettings.pipelineVersion = settings.pipelineVersion;
+    store.set('sceneSettings', sceneSettings);
+  }
+  return { success: true };
+});
+
+ipcMain.handle('text-llm:list-providers', () => {
+  return Object.values(TEXT_PROVIDERS).map(p => ({ id: p.id, name: p.name }));
+});
+
+ipcMain.handle('text-llm:list-ollama-models', async () => {
+  try {
+    const ollamaUrl = getOllamaUrl();
+    const response = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    if (!response.ok) return { success: false, models: [] };
+    const data = await response.json();
+    const models = (data.models || []).map(m => ({ id: m.name, name: m.name, size: m.size }));
+    return { success: true, models };
+  } catch (err) {
+    console.error('[Main] Ollama model list failed:', err.message || err);
+    return { success: false, models: [] };
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Visual Profiles
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('visual-profiles:get', (event, storyId) => {
+  return db.getVisualProfiles(storyId);
+});
+
+ipcMain.handle('visual-profiles:reset', (event, storyId) => {
+  db.resetVisualProfiles(storyId);
+  return { success: true };
+});
+
+// ---------------------------------------------------------------------------
 // Lore Comprehension — Progressive scan state (in-memory, not persisted)
 // ---------------------------------------------------------------------------
 
@@ -1181,43 +1442,83 @@ function makeNovelaiGenerateTextFn() {
 }
 
 function makeOllamaGenerateTextFn() {
-  const ollamaUrl = store.get('loreOllamaUrl') || 'http://localhost:11434';
-  const ollamaModel = store.get('loreOllamaModel') || 'mistral:7b';
-
   return async (messages, options) => {
-    const response = await fetch(`${ollamaUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: ollamaModel,
-        messages,
-        stream: false,
-        options: {
-          num_predict: options.max_tokens || 300,
-          temperature: options.temperature || 0.4,
-        },
-      }),
-    });
+    // Read URL and model at call time so settings changes take effect immediately
+    const ollamaUrl = getOllamaUrl();
+    const ollamaModel = store.get('loreOllamaModel') || 'mistral:7b';
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
+
+    let response;
+    try {
+      response = await fetch(`${ollamaUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: ollamaModel,
+          messages,
+          stream: false,
+          options: {
+            num_predict: options.max_tokens || 300,
+            temperature: options.temperature || 0.4,
+          },
+        }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timeout);
+      if (err.name === 'AbortError') throw new Error('Ollama API timed out after 120s');
+      throw err;
+    }
 
     if (!response.ok) {
+      clearTimeout(timeout);
       const text = await response.text();
       throw new Error(`Ollama API error ${response.status}: ${text}`);
     }
 
     const data = await response.json();
+    clearTimeout(timeout);
     return { output: data.message?.content || '' };
   };
 }
 
+function makeOpenaiGenerateTextFn() {
+  return async (messages, options) => {
+    return openaiTextProvider.generateText(messages, {
+      max_tokens: options.max_tokens || 300,
+      temperature: options.temperature || 0.4,
+    }, store);
+  };
+}
+
+function makeAnthropicGenerateTextFn() {
+  return async (messages, options) => {
+    return anthropicTextProvider.generateText(messages, {
+      max_tokens: options.max_tokens || 300,
+      temperature: options.temperature || 0.4,
+    }, store);
+  };
+}
+
+function makeGenerateTextFn(providerName) {
+  switch (providerName) {
+    case 'ollama': return makeOllamaGenerateTextFn();
+    case 'openai': return makeOpenaiGenerateTextFn();
+    case 'anthropic': return makeAnthropicGenerateTextFn();
+    default: return makeNovelaiGenerateTextFn();
+  }
+}
+
 function makeLoreGenerateTextFn() {
   const llmProvider = store.get('loreLlmProvider') || 'novelai';
-  if (llmProvider === 'ollama') return makeOllamaGenerateTextFn();
-  return makeNovelaiGenerateTextFn();
+  return makeGenerateTextFn(llmProvider);
 }
 
 async function isOllamaAvailable() {
   try {
-    const ollamaUrl = store.get('loreOllamaUrl') || 'http://localhost:11434';
+    const ollamaUrl = getOllamaUrl();
     const response = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(2000) });
     return response.ok;
   } catch {
@@ -1347,31 +1648,44 @@ ipcMain.handle('lore:scan', async (event, { storyText, existingEntries, storyId,
     // Save updated state
     db.setLoreState(storyId, result.state);
 
-    // Chain LitRPG scan if enabled and autoScan is on
+    // Chain LitRPG scan asynchronously — don't block lore scan return
     const rpgState = db.getLitrpgState(storyId);
     if (rpgState && rpgState.enabled && rpgState.autoScan !== false) {
-      console.log('[Main] Chaining LitRPG scan after lore scan');
-      try {
-        const rpgResult = await litrpgTracker.scanForRPGData(
-          storyText, rpgState, existingEntries || [], generateTextFn,
-          (progress) => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('litrpg:scan-progress', progress);
-            }
-          },
-          comprehensionContext || undefined,
-          secondaryGenerateTextFn
-        );
-        db.setLitrpgState(storyId, rpgResult.state);
-        // Notify renderer that RPG state updated
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('litrpg:state-updated', rpgResult.state);
+      console.log('[Main] Chaining LitRPG scan after lore scan (async)');
+      // Fire-and-forget — lore scan result returns immediately
+      (async () => {
+        try {
+          const rpgResult = await litrpgTracker.scanForRPGData(
+            storyText, rpgState, existingEntries || [], generateTextFn,
+            (progress) => {
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('litrpg:scan-progress', progress);
+              }
+            },
+            comprehensionContext || undefined,
+            secondaryGenerateTextFn
+          );
+          // Extract transient fields before saving (not persisted in DB)
+          const roleUpdates = rpgResult.state._pendingRoleUpdates || [];
+          delete rpgResult.state._pendingRoleUpdates;
+          const pendingLoreEntries = rpgResult.state._pendingLoreEntries || [];
+          delete rpgResult.state._pendingLoreEntries;
+          delete rpgResult.state._r4Skipped;
+
+          db.setLitrpgState(storyId, rpgResult.state);
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('litrpg:state-updated', {
+              state: rpgResult.state,
+              roleUpdates,
+              pendingLoreEntries,
+            });
+          }
+        } catch (rpgErr) {
+          console.error('[Main] Chained LitRPG scan failed:', rpgErr.message);
         }
-      } catch (rpgErr) {
-        console.error('[Main] Chained LitRPG scan failed:', rpgErr.message);
-      }
+      })();
     } else if (!rpgState || rpgState.detected === null || rpgState.detected === false) {
-      // First scan for this story — run LitRPG detection
+      // First scan — run LitRPG detection (lightweight, keep synchronous)
       try {
         const detection = await litrpgTracker.detectLitRPG(storyText, generateTextFn);
         const newRpgState = rpgState || { ...db.LITRPG_STATE_DEFAULTS };
@@ -1618,7 +1932,7 @@ ipcMain.handle('lore:set-llm-provider', (event, { provider, ollamaModel, ollamaU
 
 ipcMain.handle('lore:check-ollama', async () => {
   try {
-    const url = store.get('loreOllamaUrl') || 'http://localhost:11434';
+    const url = getOllamaUrl();
     const response = await fetch(`${url}/api/tags`);
     if (!response.ok) return { available: false };
     const data = await response.json();
@@ -1633,7 +1947,7 @@ ipcMain.handle('lore:check-ollama', async () => {
 // IPC Handlers — Lore Comprehension (progressive scan)
 // ---------------------------------------------------------------------------
 
-ipcMain.handle('lore:start-progressive-scan', async (event, { storyId, storyText }) => {
+ipcMain.handle('lore:start-progressive-scan', async (event, { storyId, storyText, existingEntries }) => {
   try {
     // Cancel any existing scan for this story
     if (progressiveScans.has(storyId)) {
@@ -1645,6 +1959,26 @@ ipcMain.handle('lore:start-progressive-scan', async (event, { storyId, storyText
 
     const generateTextFn = makeLoreGenerateTextFn();
     const existingState = db.getComprehension(storyId) || null;
+
+    // Set up hybrid provider for parallel chunk processing
+    let secondaryGenerateTextFn = null;
+    const settings = store.get('loreSettings') || loreCreator.DEFAULT_SETTINGS;
+    if (settings.hybridEnabled !== false) {
+      const primaryProvider = store.get('loreLlmProvider') || 'novelai';
+      if (primaryProvider === 'novelai') {
+        if (await isOllamaAvailable()) {
+          secondaryGenerateTextFn = makeOllamaGenerateTextFn();
+          console.log('[Main] Hybrid comprehension scan: NovelAI (primary) + Ollama (secondary)');
+        }
+      } else if (primaryProvider === 'ollama') {
+        secondaryGenerateTextFn = makeNovelaiGenerateTextFn();
+        console.log('[Main] Hybrid comprehension scan: Ollama (primary) + NovelAI (secondary)');
+      }
+    }
+
+    // Build category registry for category-aware entity extraction
+    const loreState = db.getLoreState(storyId) || {};
+    const categories = loreCreator.buildCategoryRegistry(loreState.customCategories || []);
 
     const updatedState = await loreComprehension.runProgressiveScan(
       storyText,
@@ -1659,13 +1993,14 @@ ipcMain.handle('lore:start-progressive-scan', async (event, { storyId, storyText
         }
       },
       () => {
-        // Check cancel and pause
         const ctrl = progressiveScans.get(storyId);
         if (!ctrl) return true;
-        if (ctrl.cancel) return true;
-        // Spin-wait on pause (check every 500ms)
-        // Actually, just return cancel status — pause is handled differently
         return ctrl.cancel;
+      },
+      {
+        secondaryGenerateTextFn,
+        categories,
+        knownEntries: existingEntries || [],
       }
     );
 
@@ -1714,13 +2049,32 @@ ipcMain.handle('lore:get-comprehension', (event, storyId) => {
   return state;
 });
 
-ipcMain.handle('lore:incremental-update', async (event, { storyId, storyText }) => {
+ipcMain.handle('lore:incremental-update', async (event, { storyId, storyText, existingEntries }) => {
   try {
     const generateTextFn = makeLoreGenerateTextFn();
     const existingState = db.getComprehension(storyId) || null;
 
+    // Set up hybrid for incremental updates too
+    let secondaryGenerateTextFn = null;
+    const settings = store.get('loreSettings') || loreCreator.DEFAULT_SETTINGS;
+    if (settings.hybridEnabled !== false) {
+      const primaryProvider = store.get('loreLlmProvider') || 'novelai';
+      if (primaryProvider === 'novelai') {
+        if (await isOllamaAvailable()) secondaryGenerateTextFn = makeOllamaGenerateTextFn();
+      } else if (primaryProvider === 'ollama') {
+        secondaryGenerateTextFn = makeNovelaiGenerateTextFn();
+      }
+    }
+
+    const loreState = db.getLoreState(storyId) || {};
+    const categories = loreCreator.buildCategoryRegistry(loreState.customCategories || []);
+
     const updatedState = await loreComprehension.incrementalUpdate(
-      storyText, existingState, generateTextFn
+      storyText, existingState, generateTextFn, {
+        secondaryGenerateTextFn,
+        categories,
+        knownEntries: existingEntries || [],
+      }
     );
 
     db.setComprehension(storyId, updatedState);
@@ -1928,6 +2282,13 @@ ipcMain.handle('litrpg:get-state', (event, storyId) => {
 });
 
 ipcMain.handle('litrpg:set-state', (event, { storyId, state }) => {
+  // Strip transient portrait base64 data before persisting (filesystem-backed)
+  if (state && state.characters) {
+    for (const char of Object.values(state.characters)) {
+      delete char._portraitData;
+      delete char._thumbnailData;
+    }
+  }
   db.setLitrpgState(storyId, state);
   return { success: true };
 });
@@ -2073,6 +2434,7 @@ ipcMain.handle('portrait:generate', async (event, { storyId, characterId, charac
     const buffer = Buffer.from(base64, 'base64');
 
     portraitManager.savePortrait(storyId, characterId, buffer);
+    portraitManager.saveToAlbum(storyId, characterId, buffer);
 
     return {
       success: true,
@@ -2094,6 +2456,7 @@ ipcMain.handle('portrait:upload', async (event, { storyId, characterId }) => {
   if (canceled || filePaths.length === 0) return { success: false };
   const buffer = fs.readFileSync(filePaths[0]);
   portraitManager.savePortrait(storyId, characterId, buffer);
+  portraitManager.saveToAlbum(storyId, characterId, buffer);
   return {
     success: true,
     imageData: portraitManager.getPortraitAsBase64(storyId, characterId),
@@ -2108,6 +2471,30 @@ ipcMain.handle('portrait:get', (event, { storyId, characterId, thumbnail }) => {
 ipcMain.handle('portrait:delete', (event, { storyId, characterId }) => {
   portraitManager.deletePortrait(storyId, characterId);
   return { success: true };
+});
+
+// IPC Handlers — Portrait Album
+ipcMain.handle('portrait:album-list', (event, { storyId, characterId }) => {
+  return portraitManager.listAlbum(storyId, characterId);
+});
+
+ipcMain.handle('portrait:album-get', (event, { storyId, characterId, imageId }) => {
+  return portraitManager.getAlbumImage(storyId, characterId, imageId);
+});
+
+ipcMain.handle('portrait:album-delete', (event, { storyId, characterId, imageId }) => {
+  portraitManager.deleteAlbumImage(storyId, characterId, imageId);
+  return { success: true };
+});
+
+ipcMain.handle('portrait:album-set-active', (event, { storyId, characterId, imageId }) => {
+  const ok = portraitManager.setActiveFromAlbum(storyId, characterId, imageId);
+  if (!ok) return { success: false, error: 'Album image not found' };
+  return {
+    success: true,
+    imageData: portraitManager.getPortraitAsBase64(storyId, characterId),
+    thumbnailData: portraitManager.getPortraitAsBase64(storyId, characterId, true),
+  };
 });
 
 // IPC Handlers — Media Gallery
@@ -2139,7 +2526,22 @@ ipcMain.handle('media:get-count', (event, { storyId }) => {
 // IPC Handlers — Story bulk load (SQLite)
 ipcMain.handle('story:load-all', (event, { storyId, storyTitle }) => {
   db.upsertStory(storyId, storyTitle || '');
-  return db.loadAllStoryData(storyId);
+  const allData = db.loadAllStoryData(storyId);
+
+  // Hydrate portrait data from filesystem for characters with portraitPath
+  if (allData.litrpgState && allData.litrpgState.characters) {
+    for (const [charId, char] of Object.entries(allData.litrpgState.characters)) {
+      if (char.portraitPath && portraitManager.hasPortrait(storyId, charId)) {
+        char._portraitData = portraitManager.getPortraitAsBase64(storyId, charId, false);
+        char._thumbnailData = portraitManager.getPortraitAsBase64(storyId, charId, true);
+      } else if (char.portraitPath) {
+        // Portrait file missing — clear stale flag
+        char.portraitPath = false;
+      }
+    }
+  }
+
+  return allData;
 });
 
 // IPC Handlers — Storyboard

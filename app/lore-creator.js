@@ -15,7 +15,7 @@ const LOG_PREFIX = '[LoreCreator]';
 // ============================================================================
 
 const MAX_INPUT_TEXT = 6000;
-const MAX_ELEMENTS_PER_SCAN = 8;
+const MAX_ELEMENTS_PER_SCAN = 12;
 const INTER_CALL_DELAY = 1000;
 const MAX_UPDATES_PER_SCAN = 3;
 
@@ -129,17 +129,19 @@ async function identifyLoreElements(storyText, settings, existingEntries, genera
   // Build existing entries block — rich detail for top 20, compact names for the rest
   let existingLine = '';
   if (existingEntries.length > 0) {
-    const richLines = existingEntries.slice(0, 20).map(e => {
+    const richLines = existingEntries.slice(0, 30).map(e => {
       const aliases = (e.keys || []).filter(k => k.toLowerCase() !== (e.displayName || '').toLowerCase());
       const aliasStr = aliases.length > 0 ? ` (aliases: ${aliases.slice(0, 3).join(', ')})` : '';
-      const snippet = (e.text || '').slice(0, 80).replace(/\n/g, ' ');
-      return `- ${e.displayName}${aliasStr}: ${snippet}`;
+      const snippet = (e.text || '').slice(0, 200).replace(/\n/g, ' ');
+      const typeTag = getEntryType(e.text, e.displayName) || 'unknown';
+      return `- ${e.displayName} [${typeTag}]${aliasStr}: ${snippet}`;
     });
-    // Compact format for entries 21+ — just name and aliases, no text snippet
-    const compactLines = existingEntries.slice(20).map(e => {
+    // Compact format for entries 31+ — just name, category, and aliases, no text snippet
+    const compactLines = existingEntries.slice(30).map(e => {
       const aliases = (e.keys || []).filter(k => k.toLowerCase() !== (e.displayName || '').toLowerCase());
       const aliasStr = aliases.length > 0 ? ` (aliases: ${aliases.slice(0, 3).join(', ')})` : '';
-      return `- ${e.displayName}${aliasStr}`;
+      const typeTag = getEntryType(e.text, e.displayName) || 'unknown';
+      return `- ${e.displayName} [${typeTag}]${aliasStr}`;
     });
     const allLines = [...richLines, ...compactLines];
     existingLine = `\nEXISTING ENTRIES (${existingEntries.length} total):\n${allLines.join('\n')}\n`;
@@ -168,7 +170,7 @@ async function identifyLoreElements(storyText, settings, existingEntries, genera
   const messages = [
     {
       role: 'system',
-      content: 'You are an expert story analyst. Identify important lore-worthy elements from story text. IMPORTANT: Do not identify elements that are clearly the same entity as an existing entry, even under a different name or alias. Output ONLY valid JSON.',
+      content: 'You are an expert story analyst. Identify important lore-worthy elements from story text. IMPORTANT: Do not identify elements that are clearly the same entity as an existing entry, even under a different name or alias. Aim for diversity across categories — if the story has both characters and locations/items/factions, include a mix rather than only characters. Output ONLY valid JSON.',
     },
     {
       role: 'user',
@@ -187,7 +189,7 @@ Output ONLY this JSON format, no other text:
 
   try {
     const response = await generateTextFn(messages, {
-      max_tokens: 300,
+      max_tokens: 450,
       temperature: settings.temperature,
     });
 
@@ -231,7 +233,7 @@ async function generateLoreEntryFromElement(name, category, storyText, settings,
 
   let detailInstructions = '';
   if (template) {
-    detailInstructions = `Use this structured format for the text field:\n${template}\n\nOnly include information that is explicitly stated or clearly shown in the text. Leave fields blank if the story doesn't provide that information. Do NOT speculate or infer.`;
+    detailInstructions = `Use this structured format for the text field:\n${template}\n\nInclude information that is explicitly stated or clearly supported by the text. Leave fields blank if the story provides no basis for them. Do not speculate beyond what the text reasonably supports.`;
     if (category === 'character') {
       detailInstructions += '\n- Relationships/Family: use "- Name: detail" format, one per line';
     }
@@ -267,7 +269,7 @@ async function generateLoreEntryFromElement(name, category, storyText, settings,
   const messages = [
     {
       role: 'system',
-      content: 'You are a lorebook entry writer for interactive fiction. Create accurate, well-structured lorebook entries based on what is explicitly stated or clearly shown in the story. Do not speculate or infer beyond what the text supports. Output ONLY valid JSON.',
+      content: 'You are a lorebook entry writer for interactive fiction. Create accurate, well-structured lorebook entries based on what is explicitly stated or clearly supported by the story. Do not speculate beyond what the text reasonably supports. Output ONLY valid JSON.',
     },
     {
       role: 'user',
@@ -276,7 +278,7 @@ ${otherEntriesLine}
 ${comprehensionBlock}Based on this recent story context:
 ${contextText}
 
-${detailInstructions} Stick strictly to what is stated or shown in the story text. Provide 2-4 short keywords or aliases that would trigger this entry.${relationshipInstruction}
+${detailInstructions} Include only what is clearly supported by the story text. Provide 2-4 short keywords or aliases that would trigger this entry.${relationshipInstruction}
 
 Output ONLY this JSON format, no other text:
 {"displayName":"Full Name","keys":["key1","key2"],"text":"Entry text here.","confidence":3}`,
@@ -329,7 +331,7 @@ async function detectEntryUpdate(displayName, currentText, storyText, settings, 
   const comprehensionBlock = comprehensionContext
     ? `\n${comprehensionContext}\n`
     : '';
-  const maxStoryChars = 4000 - safeCurrentText.length - comprehensionBlock.length - 600;
+  const maxStoryChars = 6000 - safeCurrentText.length - comprehensionBlock.length - 600;
   const contextText = storyText.length > maxStoryChars
     ? storyText.slice(-maxStoryChars)
     : storyText;
@@ -337,7 +339,7 @@ async function detectEntryUpdate(displayName, currentText, storyText, settings, 
   const messages = [
     {
       role: 'system',
-      content: 'You analyze story text to detect new information about existing lorebook entries. Consider both explicitly stated information AND what can be reasonably deduced from character behavior and narrative context. Output ONLY valid JSON.',
+      content: 'You analyze story text to detect new information about existing lorebook entries. Consider information that is explicitly stated or clearly supported by character behavior and narrative context. Output ONLY valid JSON.',
     },
     {
       role: 'user',
@@ -349,7 +351,7 @@ ${comprehensionBlock}
 Story text:
 ${contextText}
 
-If the story reveals new details (stated or deducible) not in the entry, return updated entry text that incorporates the new info while keeping existing info.
+If the story reveals new details (stated or clearly supported) not in the entry, return updated entry text that incorporates the new info while keeping existing info.
 If NO new information is found, return noUpdate.
 
 Output ONLY one of these JSON formats:
@@ -866,19 +868,24 @@ const METADATA_VERSION = 2;
 
 /**
  * Parse @-prefixed metadata header from entry text.
- * Returns { type, version, updated, source, rest } where rest is text without header.
+ * Returns { type, version, updated, source, role, protagonist, rest, all }
+ * where `all` is a Record<string, string> of every @key: value pair found,
+ * and `rest` is the text without the header.
  */
 function parseMetadata(text) {
-  if (!text) return { type: null, version: null, updated: null, source: null, role: null, protagonist: false, rest: '' };
+  const empty = { type: null, version: null, updated: null, source: null, role: null, protagonist: false, rest: '', all: {} };
+  if (!text) return empty;
   const lines = text.split('\n');
   const meta = { type: null, version: null, updated: null, source: null, role: null, protagonist: false };
+  const all = {};
   let headerEnd = 0;
 
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^@(\w+):\s*(.+)$/);
+    const m = lines[i].match(/^@([\w-]+):\s*(.+)$/);
     if (m) {
       const key = m[1].toLowerCase();
       const val = m[2].trim();
+      all[key] = val;
       if (key === 'type') meta.type = val;
       else if (key === 'v') meta.version = parseInt(val, 10) || null;
       else if (key === 'updated') meta.updated = val;
@@ -896,12 +903,14 @@ function parseMetadata(text) {
     headerEnd++;
   }
 
-  return { ...meta, rest: lines.slice(headerEnd).join('\n') };
+  return { ...meta, rest: lines.slice(headerEnd).join('\n'), all };
 }
 
 /**
  * Set/replace metadata header on entry text.
- * opts: { type, version, updated, source } — only provided fields are set.
+ * opts: { type, version, updated, source, role, protagonist, extras }
+ * Named fields are handled individually. `extras` is a Record<string, string|null>
+ * for arbitrary keys — null removes a key. Unknown existing keys are preserved by default.
  */
 function setMetadata(text, opts) {
   const existing = parseMetadata(text);
@@ -913,6 +922,7 @@ function setMetadata(text, opts) {
   const role = opts.role !== undefined ? opts.role : existing.role;
   const protagonist = opts.protagonist !== undefined ? opts.protagonist : existing.protagonist;
 
+  // Build known keys first (in canonical order)
   const headerLines = [];
   if (type) headerLines.push(`@type: ${type}`);
   if (version) headerLines.push(`@v: ${version}`);
@@ -920,6 +930,23 @@ function setMetadata(text, opts) {
   if (source) headerLines.push(`@source: ${source}`);
   if (role) headerLines.push(`@role: ${role}`);
   if (protagonist) headerLines.push(`@protagonist: true`);
+
+  // Preserve unknown existing keys and apply extras
+  const knownKeys = new Set(['type', 'v', 'updated', 'source', 'role', 'protagonist']);
+  const extras = opts.extras || {};
+  // Merge: existing unknowns + explicit extras (extras override existing)
+  const extraKeys = {};
+  for (const [k, v] of Object.entries(existing.all)) {
+    if (!knownKeys.has(k)) extraKeys[k] = v;
+  }
+  for (const [k, v] of Object.entries(extras)) {
+    if (knownKeys.has(k)) continue; // known keys handled above
+    if (v === null) { delete extraKeys[k]; continue; }
+    extraKeys[k] = v;
+  }
+  for (const [k, v] of Object.entries(extraKeys)) {
+    headerLines.push(`@${k}: ${v}`);
+  }
 
   if (headerLines.length === 0) return existing.rest;
   return headerLines.join('\n') + '\n\n' + existing.rest;
@@ -951,29 +978,54 @@ function getEntryType(text, displayName) {
 async function propagateFamilyNames(characterEntries, generateTextFn, comprehensionContext) {
   if (characterEntries.length < 2) return [];
 
-  // Build compact summary of characters
-  const charSummaries = characterEntries.map(e => {
+  // Separate characters into those needing names and those that already have them
+  const needsLastName = [];
+  const hasLastName = [];
+  for (const e of characterEntries) {
+    const name = (extractField(e.text, 'Name') || e.displayName || '').trim();
+    if (name.split(/\s+/).length < 2) {
+      needsLastName.push(e);
+    } else {
+      hasLastName.push(e);
+    }
+  }
+
+  if (needsLastName.length === 0) return [];
+
+  // Only include characters that are relevant: those needing names + those connected to them
+  const needsNames = new Set(needsLastName.map(e =>
+    (extractField(e.text, 'Name') || e.displayName || '').trim().toLowerCase()
+  ));
+
+  // Find which named characters are connected to nameless ones
+  const relevantNamed = hasLastName.filter(e => {
+    const family = (extractField(e.text, 'Family') || '').toLowerCase();
+    const relationships = (extractField(e.text, 'Relationships') || '').toLowerCase();
+    const combined = family + ' ' + relationships;
+    for (const nameless of needsNames) {
+      if (combined.includes(nameless.split(/\s+/)[0])) return true;
+    }
+    return false;
+  });
+
+  // Build compact prompt with only relevant characters
+  const relevantEntries = [...needsLastName, ...relevantNamed];
+  const charSummaries = relevantEntries.map(e => {
     const name = extractField(e.text, 'Name') || e.displayName;
     const family = extractField(e.text, 'Family');
     const relationships = extractField(e.text, 'Relationships');
-    return `- ${name}${family ? `\n  Family: ${family}` : ''}${relationships ? `\n  Relationships: ${relationships}` : ''}`;
+    return `- ${name}${family ? ` | Family: ${family}` : ''}${relationships ? ` | Relationships: ${relationships}` : ''}`;
   }).join('\n');
 
-  const comprehensionBlock = comprehensionContext
-    ? `\nSTORY CONTEXT:\n${comprehensionContext}\n`
-    : '';
-
-  // Build explicit relationship graph for the LLM
-  const charNames = characterEntries.map(e =>
+  // Build connection graph (only between relevant characters)
+  const relevantNames = relevantEntries.map(e =>
     (extractField(e.text, 'Name') || e.displayName).trim()
   );
   const connections = [];
-  for (const e of characterEntries) {
+  for (const e of relevantEntries) {
     const name = (extractField(e.text, 'Name') || e.displayName).trim();
-    const family = extractField(e.text, 'Family') || '';
-    const relationships = extractField(e.text, 'Relationships') || '';
-    const combined = family + '\n' + relationships;
-    for (const other of charNames) {
+    const combined = (extractField(e.text, 'Family') || '') + '\n' + (extractField(e.text, 'Relationships') || '');
+    for (const other of relevantNames) {
       if (other !== name && combined.toLowerCase().includes(other.toLowerCase().split(/\s+/)[0].toLowerCase())) {
         connections.push(`${name} <-> ${other}`);
       }
@@ -981,37 +1033,42 @@ async function propagateFamilyNames(characterEntries, generateTextFn, comprehens
   }
   const uniqueConnections = [...new Set(connections)];
   const graphBlock = uniqueConnections.length > 0
-    ? `\nKNOWN CONNECTIONS (characters explicitly linked in Family/Relationships fields):\n${uniqueConnections.join('\n')}\n`
-    : '\nNo explicit connections found between characters.\n';
+    ? `\nCONNECTIONS:\n${uniqueConnections.join('\n')}\n`
+    : '';
+
+  const needingList = needsLastName.map(e =>
+    (extractField(e.text, 'Name') || e.displayName).trim()
+  ).join(', ');
+
+  const comprehensionBlock = comprehensionContext
+    ? `\nSTORY CONTEXT:\n${comprehensionContext}\n`
+    : '';
 
   const messages = [
     {
       role: 'system',
-      content: 'You analyze character relationships to ensure consistent family naming in a lorebook. Output ONLY valid JSON.',
+      content: 'You assign last names to characters based on family connections. Output ONLY valid JSON.',
     },
     {
       role: 'user',
-      content: `Review these characters and their family/relationship data. Assign last names ONLY based on explicit family connections.
+      content: `These characters need last names: ${needingList}
 ${comprehensionBlock}
 CHARACTERS:
 ${charSummaries}
 ${graphBlock}
-STRICT RULES:
-1. PROPAGATE an existing last name ONLY to characters who are explicitly listed in that character's Family or Relationships field (or vice versa). Example: if "Alex Copeland" lists "Lily" as daughter, give Lily the last name Copeland.
-2. For characters who have NO explicit family connection to ANY character with a last name, create a UNIQUE NEW last name that fits the story setting. Each unrelated character gets their OWN distinct last name.
-3. NEVER assign an existing character's last name to someone who is not explicitly mentioned in their Family/Relationships fields.
-4. Do NOT change names that already have last names.
-5. Only propose changes for characters who currently lack a last name.
+RULES:
+1. PROPAGATE an existing last name to characters explicitly listed in that character's Family/Relationships (e.g., if "Alex Copeland" lists "Lily" as daughter, Lily becomes "Lily Copeland").
+2. Characters with NO family connection to a named character get a UNIQUE NEW last name fitting the story setting.
+3. NEVER assign a character's last name to someone not in their Family/Relationships.
 
-Output ONLY this JSON format:
-{"proposals":[{"currentName":"First","proposedName":"First Last","reason":"brief explanation"}]}
-If no changes needed: {"proposals":[]}`,
+Output: {"proposals":[{"currentName":"First","proposedName":"First Last","reason":"brief"}]}
+If none needed: {"proposals":[]}`,
     },
   ];
 
   try {
     const response = await generateTextFn(messages, {
-      max_tokens: 400,
+      max_tokens: 300,
       temperature: 0.3,
     });
 
@@ -1562,7 +1619,7 @@ async function updateRelationshipFields(displayName, currentText, storyText, gen
     ? `\nSTORY COMPREHENSION:\n${comprehensionContext}\n`
     : '';
 
-  const maxStoryChars = 4000 - (currentFamily.length + currentRelationships.length + comprehensionBlock.length + 800);
+  const maxStoryChars = 6000 - (currentFamily.length + currentRelationships.length + comprehensionBlock.length + 800);
   const contextText = storyText.length > maxStoryChars
     ? storyText.slice(-maxStoryChars)
     : storyText;
@@ -2166,6 +2223,36 @@ async function scanForLore(storyText, settings, existingEntries, state, generate
     }
   }
 
+  // Post-Pass-2: deduplicate newly generated entries against each other
+  if (updatedState.pendingEntries.length > 1) {
+    const seen = new Map();
+    const toRemove = new Set();
+    for (let j = 0; j < updatedState.pendingEntries.length; j++) {
+      const entry = updatedState.pendingEntries[j];
+      const name = (entry.displayName || '').toLowerCase();
+      let isDup = false;
+      for (const [seenName, seenIdx] of seen) {
+        if (fuzzyNameScore(name, seenName) >= 0.7) {
+          const seenEntry = updatedState.pendingEntries[seenIdx];
+          if ((entry.text || '').length > (seenEntry.text || '').length) {
+            toRemove.add(seenIdx);
+            seen.set(name, j);
+          } else {
+            toRemove.add(j);
+          }
+          isDup = true;
+          break;
+        }
+      }
+      if (!isDup) seen.set(name, j);
+    }
+    if (toRemove.size > 0) {
+      console.log(`${LOG_PREFIX} Post-Pass-2 dedup: removing ${toRemove.size} duplicate pending entries`);
+      updatedState.pendingEntries = updatedState.pendingEntries.filter((_, idx) => !toRemove.has(idx));
+      generated = updatedState.pendingEntries.length;
+    }
+  }
+
   // Merge phase (hybrid parallel when secondary available)
   let mergesFound = 0;
   const mergeCount = Math.min(mergeElements.length, MAX_UPDATES_PER_SCAN);
@@ -2267,32 +2354,41 @@ async function scanForLore(storyText, settings, existingEntries, state, generate
   }
 
   // Pass 3b: Update Family/Relationships in already-formatted character entries
-  const MAX_RELATIONSHIP_UPDATES = 3;
+  const MAX_RELATIONSHIP_UPDATES = 5;
   let relationshipUpdatesFound = 0;
   const pendingUpdateNames = new Set(
     updatedState.pendingUpdates.map(u => u.displayName.toLowerCase())
   );
   const formattedChars = existingEntries.filter(e =>
     e.text && e.text.length > 30 &&
-    isCharacterEntryFormatted(e.text) &&
+    (getEntryType(e.text, e.displayName) === 'character' || looksLikeCharacterEntry(e.text)) &&
     !pendingUpdateNames.has((e.displayName || '').toLowerCase())
   );
 
   if (formattedChars.length > 0 && settings.autoDetectUpdates) {
     if (onProgress) onProgress({ phase: 'updating-relationships' });
-    console.log(`${LOG_PREFIX} Pass 3b: Checking ${formattedChars.length} formatted characters for relationship updates`);
+    console.log(`${LOG_PREFIX} Pass 3b: Checking ${formattedChars.length} formatted characters for relationship updates${hybrid.isHybrid() ? ' (hybrid parallel)' : ''}`);
 
     const relBudget = Math.min(formattedChars.length, MAX_RELATIONSHIP_UPDATES);
-    for (let i = 0; i < relBudget; i++) {
+    for (let i = 0; i < relBudget;) {
       await delay(INTER_CALL_DELAY);
-      const entry = formattedChars[i];
+      const relProviders = hybrid.getProviders();
 
-      try {
-        const relUpdate = await updateRelationshipFields(
-          entry.displayName, entry.text, storyText, generateTextFn, comprehensionContext
-        );
+      const batch = formattedChars.slice(i, Math.min(i + relProviders.length, relBudget));
+      const promises = batch.map((entry, idx) =>
+        updateRelationshipFields(
+          entry.displayName, entry.text, storyText, relProviders[idx], comprehensionContext
+        ).then(relUpdate => ({ entry, relUpdate }))
+         .catch(err => {
+           console.error(`${LOG_PREFIX} Relationship update failed for ${entry.displayName}:`, err.message);
+           return { entry, relUpdate: null };
+         })
+      );
+      i += relProviders.length;
 
-        if (!relUpdate.noUpdate) {
+      const results = await Promise.all(promises);
+      for (const { entry, relUpdate } of results) {
+        if (relUpdate && !relUpdate.noUpdate) {
           const updatedText = spliceRelationshipFields(entry.text, relUpdate);
           if (updatedText !== entry.text) {
             updatedState.pendingUpdates.push({
@@ -2309,8 +2405,6 @@ async function scanForLore(storyText, settings, existingEntries, state, generate
             if (onProgress) onProgress({ phase: 'updating-relationships', pendingUpdates: updatedState.pendingUpdates });
           }
         }
-      } catch (err) {
-        console.error(`${LOG_PREFIX} Relationship update failed for ${entry.displayName}:`, err.message);
       }
     }
 
@@ -2390,9 +2484,15 @@ async function scanForLore(storyText, settings, existingEntries, state, generate
     ...(updatedState.pendingEntries || []).filter(e => e.category === 'character'),
   ];
 
-  if (allCharEntries.length >= 2) {
+  // Early-exit: skip Pass 5 if all characters already have multi-word names
+  const charsNeedingLastName = allCharEntries.filter(e => {
+    const name = (extractField(e.text, 'Name') || e.displayName || '').trim();
+    return name.split(/\s+/).length < 2;
+  });
+
+  if (allCharEntries.length >= 2 && charsNeedingLastName.length > 0) {
     if (onProgress) onProgress({ phase: 'propagating-names' });
-    console.log(`${LOG_PREFIX} Pass 5: Propagating family names across ${allCharEntries.length} characters`);
+    console.log(`${LOG_PREFIX} Pass 5: Propagating family names across ${allCharEntries.length} characters (${charsNeedingLastName.length} need last names)`);
 
     await delay(INTER_CALL_DELAY);
     const proposals = await propagateFamilyNames(allCharEntries, generateTextFn, comprehensionContext);
@@ -2441,6 +2541,46 @@ async function scanForLore(storyText, settings, existingEntries, state, generate
   console.log(`${LOG_PREFIX} Scan complete:`, summary);
 
   return { state: updatedState, summary };
+}
+
+// ============================================================================
+// Shared LLM Retry Logic
+// ============================================================================
+
+function categorizeError(err) {
+  const msg = (err.message || '').toLowerCase();
+  const status = err.status || err.statusCode;
+  if (status === 429 || msg.includes('429') || msg.includes('rate limit') || msg.includes('too many requests')) {
+    return 'rate-limit';
+  }
+  if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('econnreset') || msg.includes('socket hang up')) {
+    return 'timeout';
+  }
+  return 'other';
+}
+
+async function retryLLM(fn, { maxRetries = 1, passName = 'unknown', logPrefix = LOG_PREFIX } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await fn();
+      if (result !== null && result !== undefined) return result;
+      console.log(`${logPrefix} retryLLM(${passName}): null result on attempt ${attempt + 1}`);
+    } catch (err) {
+      lastError = err;
+      const category = categorizeError(err);
+      console.warn(`${logPrefix} retryLLM(${passName}): ${category} on attempt ${attempt + 1}: ${err.message}`);
+      if (category === 'rate-limit' && attempt < maxRetries) {
+        const backoff = INTER_CALL_DELAY * 3 * (attempt + 1);
+        console.log(`${logPrefix} retryLLM(${passName}): rate-limit backoff ${backoff}ms`);
+        await delay(backoff);
+        continue;
+      }
+    }
+    if (attempt < maxRetries) await delay(INTER_CALL_DELAY);
+  }
+  if (lastError) console.error(`${logPrefix} retryLLM(${passName}): all attempts failed:`, lastError.message);
+  return null;
 }
 
 // ============================================================================
@@ -2497,6 +2637,10 @@ module.exports = {
   ITEM_TEMPLATE,
   FACTION_TEMPLATE,
   CONCEPT_TEMPLATE,
+
+  // LLM retry
+  retryLLM,
+  categorizeError,
 
   // Constants
   DEFAULT_SETTINGS,

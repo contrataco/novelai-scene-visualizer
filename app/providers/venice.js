@@ -284,10 +284,10 @@ module.exports = {
       prompt,
       duration,
       resolution,
-      image_url: imageDataUrl,
+      aspect_ratio: opts.aspect_ratio || '16:9',
     };
+    if (imageDataUrl) body.image_url = imageDataUrl;
     if (opts.negative_prompt) body.negative_prompt = opts.negative_prompt;
-    if (opts.aspect_ratio) body.aspect_ratio = opts.aspect_ratio;
 
     console.log(`[Venice] Queuing video: model=${model}, duration=${duration}, resolution=${resolution}`);
 
@@ -307,7 +307,7 @@ module.exports = {
     }
 
     const data = await res.json();
-    console.log(`[Venice] Video queued: ${data.queue_id}`);
+    console.log(`[Venice] Video queued: queue_id=${data.queue_id}, model=${data.model}`);
     return data;
   },
 
@@ -400,6 +400,8 @@ module.exports = {
     }
 
     const contentType = res.headers.get('content-type') || '';
+    console.log(`[Venice] Video retrieve — status: ${res.status}, content-type: ${contentType}`);
+
     if (contentType.includes('video/')) {
       // Completed — return video as base64 data URL
       const buffer = Buffer.from(await res.arrayBuffer());
@@ -409,8 +411,9 @@ module.exports = {
       return { status: 'completed', videoDataUrl: `data:${mimeType};base64,${base64}` };
     }
 
-    // Still processing
+    // Still processing — JSON response
     const data = await res.json();
+    console.log(`[Venice] Video status: ${data.status}, duration: ${data.execution_duration}ms / avg: ${data.average_execution_time}ms`);
     return {
       status: 'processing',
       averageExecutionTime: data.average_execution_time,

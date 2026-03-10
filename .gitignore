@@ -30,3 +30,4 @@ npm-debug.log*
 
 # Package lock (app has its own)
 package-lock.json
+.worktrees/

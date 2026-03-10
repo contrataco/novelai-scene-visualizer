@@ -3,7 +3,7 @@
 import { state, bus } from './state.js';
 import {
   status, imagePanel, imageContainer, loadingIndicator,
-  promptDisplay, generateBtn, sidebarGenerateBtn, autoGenerateToggle,
+  promptDisplay, negativePromptDisplay, generateBtn, sidebarGenerateBtn, autoGenerateToggle,
   commitBtn, novelaiArtStyleSelect,
   veniceBalance, veniceBalanceText,
 } from './dom-refs.js';
@@ -13,7 +13,9 @@ import { readStoryTextFromDOM } from './webview-polling.js';
 import { generateSuggestionsFromEditor } from './suggestions.js';
 
 const promptEditedIndicator = document.getElementById('promptEditedIndicator');
+const negPromptEditedIndicator = document.getElementById('negPromptEditedIndicator');
 let promptWasEdited = false;
+let negPromptWasEdited = false;
 
 const LOW_BALANCE_THRESHOLD = 1.00;
 const CRITICAL_BALANCE_THRESHOLD = 0.25;
@@ -80,7 +82,7 @@ async function handleGenerateVideo() {
     videoBtn.classList.add('generating');
 
     const queueResult = await window.sceneVisualizer.veniceQueueVideo(
-      state.currentPrompt, state.currentImageData,
+      state.currentPrompt, null,
       { negative_prompt: state.currentNegativePrompt || '' }
     );
 
@@ -98,20 +100,51 @@ async function handleGenerateVideo() {
     }
     progressEl.innerHTML = '<div class="spinner"></div> <span>Generating video...</span>';
 
-    // Poll for completion
+    // Poll for completion — resilient to DOM changes (image regeneration, tab switches)
+    const videoPrompt = state.currentPrompt;
+    const videoNegativePrompt = state.currentNegativePrompt;
+    const pollStartTime = Date.now();
+    const POLL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes max
+    let pollCount = 0;
+
+    const cleanupPoll = (errorMsg) => {
+      clearInterval(videoPollingTimer);
+      videoPollingTimer = null;
+      const btn = document.getElementById('sceneVideoBtn');
+      if (btn) { btn.disabled = false; btn.innerHTML = '&#9654; Video'; btn.classList.remove('generating'); }
+      const prog = document.getElementById('videoProgress');
+      if (prog) prog.innerHTML = '';
+      if (errorMsg) showToast(errorMsg, 5000, 'error');
+    };
+
     const pollVideo = async () => {
+      pollCount++;
       try {
+        // Timeout guard
+        if (Date.now() - pollStartTime > POLL_TIMEOUT_MS) {
+          console.error('[Video] Polling timed out after 5 minutes');
+          cleanupPoll('Video generation timed out. The video may still be processing on Venice — check your Venice dashboard.');
+          return;
+        }
+
         const result = await window.sceneVisualizer.veniceRetrieveVideo(queueId, model);
+        console.log(`[Video] Poll #${pollCount}: status=${result.status}`);
+
         if (result.status === 'completed') {
           clearInterval(videoPollingTimer);
           videoPollingTimer = null;
-          videoBtn.disabled = false;
-          videoBtn.innerHTML = '&#9654; Video';
-          videoBtn.classList.remove('generating');
 
-          // Show video
-          if (progressEl) {
-            progressEl.innerHTML = `<video controls autoplay muted style="width:100%;border-radius:8px;margin-top:4px;">
+          // DOM elements may have been destroyed by image regeneration — re-query
+          const btn = document.getElementById('sceneVideoBtn');
+          if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '&#9654; Video';
+            btn.classList.remove('generating');
+          }
+
+          const prog = document.getElementById('videoProgress');
+          if (prog) {
+            prog.innerHTML = `<video controls autoplay muted style="width:100%;border-radius:8px;margin-top:4px;">
               <source src="${result.videoDataUrl}" type="video/mp4">
             </video>
             <a href="${result.videoDataUrl}" download="scene-video.mp4" style="font-size:11px;color:var(--accent);margin-top:4px;display:inline-block;">Download</a>`;
@@ -119,23 +152,19 @@ async function handleGenerateVideo() {
           showToast('Video generated!', 3000);
           bus.emit('video:generated', {
             videoDataUrl: result.videoDataUrl,
-            meta: { provider: 'venice', model, prompt: state.currentPrompt, negativePrompt: state.currentNegativePrompt }
+            meta: { provider: 'venice', model, prompt: videoPrompt, negativePrompt: videoNegativePrompt }
           });
         } else {
-          // Still processing — update ETA
+          // Still processing — update ETA if element still exists
           const eta = result.averageExecutionTime ? Math.max(0, Math.round((result.averageExecutionTime - (result.executionDuration || 0)) / 1000)) : '?';
-          if (progressEl) {
-            progressEl.querySelector('span').textContent = `Generating video... (~${eta}s remaining)`;
-          }
+          const elapsed = Math.round((Date.now() - pollStartTime) / 1000);
+          const prog = document.getElementById('videoProgress');
+          const span = prog && prog.querySelector('span');
+          if (span) span.textContent = `Generating video... (~${eta}s remaining, ${elapsed}s elapsed)`;
         }
       } catch (e) {
-        clearInterval(videoPollingTimer);
-        videoPollingTimer = null;
-        videoBtn.disabled = false;
-        videoBtn.innerHTML = '&#9654; Video';
-        videoBtn.classList.remove('generating');
-        if (progressEl) progressEl.innerHTML = '';
-        showToast('Video generation failed: ' + e.message, 5000, 'error');
+        console.error('[Video] Poll error:', e.message);
+        cleanupPoll('Video generation failed: ' + e.message);
       }
     };
 
@@ -187,7 +216,11 @@ export async function generateImage(prompt, negativePrompt, opts = {}) {
   try {
     const result = await window.sceneVisualizer.generateImage(
       prompt, negativePrompt || state.currentNegativePrompt || '',
-      opts.rawPrompt ? { rawPrompt: true } : {}
+      {
+        ...(opts.rawPrompt ? { rawPrompt: true } : {}),
+        ...(opts.rawNegativePrompt ? { rawNegativePrompt: true } : {}),
+        storyId: state.currentStoryId,
+      }
     );
 
     if (result.success) {
@@ -278,23 +311,36 @@ export async function generateScenePromptFromEditor() {
     });
 
     if (result.success) {
-      state.currentNegativePrompt = result.negativePrompt || '';
+      const llmNegative = result.negativePrompt || '';
 
-      // Fetch provider suffix (art style + quality tags) and append to prompt
-      // so user sees the FULL final prompt in the textarea
-      let suffix = '';
+      // Fetch provider suffixes so user sees the FULL final prompt+negative in the textareas
+      let promptSuffix = '';
+      let negSuffix = '';
       try {
-        const suffixData = await window.sceneVisualizer.getPromptSuffix();
-        suffix = suffixData.combined || '';
+        const [pData, nData] = await Promise.all([
+          window.sceneVisualizer.getPromptSuffix(),
+          window.sceneVisualizer.getNegativePromptSuffix(),
+        ]);
+        promptSuffix = pData.combined || '';
+        negSuffix = nData.combined || '';
       } catch (e) {
-        console.log('[Renderer] Could not fetch prompt suffix:', e.message);
+        console.log('[Renderer] Could not fetch prompt/negative suffixes:', e.message);
       }
 
-      const fullPrompt = result.prompt + suffix;
+      const fullPrompt = result.prompt + promptSuffix;
       state.currentPrompt = fullPrompt;
       promptDisplay.value = fullPrompt;
       promptWasEdited = false;
       if (promptEditedIndicator) promptEditedIndicator.classList.remove('visible');
+
+      // Build full negative prompt: LLM negative + style/UC preset negative
+      const fullNegative = [llmNegative, negSuffix].filter(Boolean).join(', ');
+      state.currentNegativePrompt = fullNegative;
+      if (negativePromptDisplay) {
+        negativePromptDisplay.value = fullNegative;
+        negPromptWasEdited = false;
+        if (negPromptEditedIndicator) negPromptEditedIndicator.classList.remove('visible');
+      }
 
       status.textContent = 'Prompt ready';
       status.className = 'status connected';
@@ -312,9 +358,9 @@ export async function generateScenePromptFromEditor() {
 
       bus.emit('prompt:updated', { prompt: state.currentPrompt, negativePrompt: state.currentNegativePrompt });
 
-      // Auto-generate image if toggle is on — use rawPrompt since suffix is already in the prompt
+      // Auto-generate image if toggle is on — use raw flags since suffixes are already baked in
       if (autoGenerateToggle.checked && !state.isGenerating) {
-        generateImage(state.currentPrompt, state.currentNegativePrompt, { rawPrompt: true });
+        generateImage(state.currentPrompt, state.currentNegativePrompt, { rawPrompt: true, rawNegativePrompt: true });
       }
 
       // Generate suggestions in parallel
@@ -337,6 +383,19 @@ export async function generateScenePromptFromEditor() {
   }
 }
 
+// Get the effective negative prompt from textarea (if edited) or state
+function getEffectiveNegativePrompt() {
+  if (negativePromptDisplay && negPromptWasEdited) {
+    const edited = negativePromptDisplay.value.trim();
+    state.currentNegativePrompt = edited;
+    return edited;
+  }
+  if (negativePromptDisplay && negativePromptDisplay.value.trim()) {
+    return negativePromptDisplay.value.trim();
+  }
+  return state.currentNegativePrompt || '';
+}
+
 export function init() {
   const regenPromptBtn = document.getElementById('regenPromptBtn');
 
@@ -345,6 +404,14 @@ export function init() {
     promptWasEdited = true;
     if (promptEditedIndicator) promptEditedIndicator.classList.add('visible');
   });
+
+  // Track manual edits to the negative prompt textarea
+  if (negativePromptDisplay) {
+    negativePromptDisplay.addEventListener('input', () => {
+      negPromptWasEdited = true;
+      if (negPromptEditedIndicator) negPromptEditedIndicator.classList.add('visible');
+    });
+  }
 
   // Regenerate prompt button -- forces a fresh prompt from current story text
   regenPromptBtn.addEventListener('click', async () => {
@@ -363,17 +430,19 @@ export function init() {
   generateBtn.addEventListener('click', async () => {
     if (state.isGenerating) return;
 
-    // If user edited the prompt, use the textarea value (rawPrompt — textarea IS the full prompt)
+    // Textareas contain the full prompt (with style/UC already baked in) — always rawPrompt + rawNegativePrompt
     const editedPrompt = promptDisplay.value.trim();
+    const negPrompt = getEffectiveNegativePrompt();
+
     if (editedPrompt && promptWasEdited) {
       state.currentPrompt = editedPrompt;
-      await generateImage(editedPrompt, state.currentNegativePrompt, { rawPrompt: true });
+      await generateImage(editedPrompt, negPrompt, { rawPrompt: true, rawNegativePrompt: true });
       return;
     }
 
     // If we already have a prompt, use it directly (already includes suffix)
     if (state.currentPrompt) {
-      await generateImage(state.currentPrompt, state.currentNegativePrompt, { rawPrompt: true });
+      await generateImage(state.currentPrompt, negPrompt, { rawPrompt: true, rawNegativePrompt: true });
       return;
     }
 
@@ -381,7 +450,7 @@ export function init() {
     try {
       await generateScenePromptFromEditor();
       if (state.currentPrompt) {
-        await generateImage(state.currentPrompt, state.currentNegativePrompt, { rawPrompt: true });
+        await generateImage(state.currentPrompt, getEffectiveNegativePrompt(), { rawPrompt: true, rawNegativePrompt: true });
       } else {
         status.textContent = 'No prompt generated — write more story content';
         status.className = 'status error';
@@ -405,7 +474,8 @@ export function init() {
     const prompt = editedPrompt || state.currentPrompt;
     if (state.isGenerating || !prompt) return;
     if (editedPrompt) state.currentPrompt = editedPrompt;
-    generateImage(state.currentPrompt, state.currentNegativePrompt, { rawPrompt: true });
+    const negPrompt = getEffectiveNegativePrompt();
+    generateImage(state.currentPrompt, negPrompt, { rawPrompt: true, rawNegativePrompt: true });
   });
 
   // Venice balance — listen for updates from main process
@@ -419,4 +489,18 @@ export function init() {
   // Show/hide balance indicator based on provider (on init and after settings save)
   refreshVeniceBalanceVisibility();
   bus.on('settings:saved', refreshVeniceBalanceVisibility);
+
+  // After settings change (art style, UC preset, etc.), refresh the neg prompt suffix
+  // only if the user hasn't manually edited the neg prompt
+  bus.on('settings:saved', async () => {
+    if (negPromptWasEdited || !negativePromptDisplay) return;
+    try {
+      const nData = await window.sceneVisualizer.getNegativePromptSuffix();
+      const negSuffix = nData.combined || '';
+      // Rebuild: preserve any LLM-generated prefix, replace the suffix portion
+      // Simplest approach: just set the full effective negative
+      state.currentNegativePrompt = negSuffix;
+      negativePromptDisplay.value = negSuffix;
+    } catch { /* ignore */ }
+  });
 }

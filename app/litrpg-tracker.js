@@ -6,7 +6,7 @@
  * Data stored as structured JSON in SQLite, synced to lorebook text entries.
  */
 
-const { fuzzyNameScore, recoverJSON, extractField, parseMetadata, setMetadata, getTemplateForType, METADATA_VERSION } = require('./lore-creator');
+const { fuzzyNameScore, recoverJSON, extractField, parseMetadata, setMetadata, getEntryType, getTemplateForType, METADATA_VERSION, retryLLM } = require('./lore-creator');
 
 const LOG_PREFIX = '[LitRPG]';
 
@@ -384,43 +384,7 @@ function validateClassification(data) {
   return cleaned;
 }
 
-// --- Retry Logic (Phase 1C) ---
-
-function categorizeError(err) {
-  const msg = (err.message || '').toLowerCase();
-  const status = err.status || err.statusCode;
-  if (status === 429 || msg.includes('429') || msg.includes('rate limit') || msg.includes('too many requests')) {
-    return 'rate-limit';
-  }
-  if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('econnreset') || msg.includes('socket hang up')) {
-    return 'timeout';
-  }
-  return 'other';
-}
-
-async function retryLLM(fn, { maxRetries = 1, passName = 'unknown' } = {}) {
-  let lastError = null;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const result = await fn();
-      if (result !== null && result !== undefined) return result;
-      console.log(`${LOG_PREFIX} retryLLM(${passName}): null result on attempt ${attempt + 1}`);
-    } catch (err) {
-      lastError = err;
-      const category = categorizeError(err);
-      console.warn(`${LOG_PREFIX} retryLLM(${passName}): ${category} on attempt ${attempt + 1}: ${err.message}`);
-      if (category === 'rate-limit' && attempt < maxRetries) {
-        const backoff = INTER_CALL_DELAY * 3 * (attempt + 1);
-        console.log(`${LOG_PREFIX} retryLLM(${passName}): rate-limit backoff ${backoff}ms`);
-        await delay(backoff);
-        continue;
-      }
-    }
-    if (attempt < maxRetries) await delay(INTER_CALL_DELAY);
-  }
-  if (lastError) console.error(`${LOG_PREFIX} retryLLM(${passName}): all attempts failed:`, lastError.message);
-  return null;
-}
+// --- Retry Logic (Phase 1C) — imported from lore-creator.js ---
 
 // --- Hybrid LLM Fallback ---
 
@@ -1669,6 +1633,9 @@ async function scanForRPGData(storyText, rpgState, loreEntries, generateTextFn, 
   }
 
   const characterEntries = loreEntries.filter(e => {
+    const entryType = getEntryType(e.text, e.displayName);
+    if (['item', 'location', 'faction', 'concept'].includes(entryType)) return false;
+    if (entryType === 'character') return true;
     const text = (e.text || '').toLowerCase();
     return text.includes('name:') || text.includes('appearance') || text.includes('class:');
   });
@@ -2007,9 +1974,21 @@ async function scanForRPGData(storyText, rpgState, loreEntries, generateTextFn, 
         }
       }
 
-      // Default unclassified characters to NPC (not invisible)
+      // Default unclassified characters to NPC, but remove non-character entries that slipped through
       for (const [id, char] of Object.entries(state.characters)) {
         if (!classifiedIds.has(id) && !char.isPartyMember && !char.isNPC) {
+          // If we have a lorebook entry with a non-character @type, remove from tracking
+          if (char.loreEntryName) {
+            const loreEntry = loreEntries.find(e => e.displayName === char.loreEntryName);
+            if (loreEntry) {
+              const entryType = getEntryType(loreEntry.text, loreEntry.displayName);
+              if (['item', 'location', 'faction', 'concept'].includes(entryType)) {
+                console.log(`${LOG_PREFIX} R3: Removing non-character "${char.name}" (@type: ${entryType}) from tracking`);
+                delete state.characters[id];
+                continue;
+              }
+            }
+          }
           char.isNPC = true;
           char.partyRole = null;
           console.log(`${LOG_PREFIX} R3: Defaulting unclassified "${char.name}" to NPC`);

@@ -23,6 +23,7 @@ import {
   webview,
 } from './dom-refs.js';
 import { escapeHtml, showToast } from './utils.js';
+import { parseMetadataClient } from './metadata.js';
 
 // =========================================================================
 // ROLE CONSTANTS
@@ -190,6 +191,9 @@ function openStatOverlay(charId, rpg) {
   // Wire role cycle chip
   const roleChip = rpgStatOverlayContent.querySelector('.rpg-role-chip');
   if (roleChip) roleChip.addEventListener('click', () => cycleRole(charId));
+
+  // Load album
+  loadAlbumStrip(charId);
 }
 
 function closeStatOverlay() {
@@ -284,6 +288,20 @@ function buildStatSheetHTML(char) {
   const roleColor = currentRole ? (ROLE_COLORS[currentRole] || '#666') : '#666';
   const roleChipHTML = `<button class="rpg-role-chip" data-role="${escapeHtml(currentRole || '')}" title="Click to cycle role" style="font-size:9px;padding:1px 8px;margin-top:3px;background:transparent;color:${roleColor};border:1px solid ${roleColor};border-radius:10px;cursor:pointer;display:inline-block;">${escapeHtml(roleLabel)}</button>`;
 
+  // NPC info section (disposition, faction, role, relationship)
+  const DISPOSITION_COLORS = { friendly: '#81c784', neutral: '#ffd54f', hostile: '#ff6b6b', unknown: '#90a4ae' };
+  const npcInfoHTML = char.isNPC ? `
+    <div style="margin:6px 0;padding:6px 8px;background:rgba(144,164,174,0.1);border-radius:4px;border:1px solid rgba(144,164,174,0.2);">
+      <div style="font-size:10px;color:#90a4ae;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">NPC Info</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+        ${char.disposition ? `<span style="font-size:10px;padding:1px 8px;border-radius:10px;border:1px solid ${DISPOSITION_COLORS[char.disposition] || DISPOSITION_COLORS.unknown};color:${DISPOSITION_COLORS[char.disposition] || DISPOSITION_COLORS.unknown};">${escapeHtml(char.disposition)}</span>` : ''}
+        ${char.npcRole ? `<span style="font-size:10px;color:#a0a0ff;">${escapeHtml(char.npcRole)}</span>` : ''}
+      </div>
+      ${char.faction ? `<div style="font-size:11px;color:var(--cat-faction);margin-top:3px;">Faction: ${escapeHtml(char.faction)}</div>` : ''}
+      ${char.npcRelationship ? `<div style="font-size:11px;color:#aaa;margin-top:3px;">Relationship: ${escapeHtml(char.npcRelationship)}</div>` : ''}
+    </div>
+  ` : '';
+
   return `
     <div class="rpg-stat-header">
       <div class="rpg-portrait-large">
@@ -307,6 +325,13 @@ function buildStatSheetHTML(char) {
         <button class="rpg-char-delete-btn" title="Delete" style="font-size:10px;padding:2px 8px;background:#3a1a1a;color:#ff6b6b;border:1px solid #ff6b6b;border-radius:4px;cursor:pointer;">Del</button>
       </div>
     </div>
+    <details class="rpg-album-section" style="margin:8px 0;">
+      <summary style="cursor:pointer;font-size:11px;color:var(--text-dim);user-select:none;">Image Album <span class="rpg-album-count"></span></summary>
+      <div class="rpg-album-strip" style="display:flex;flex-wrap:wrap;gap:4px;padding:6px 0;min-height:40px;">
+        <div style="font-size:10px;color:#555;">Loading...</div>
+      </div>
+    </details>
+    ${npcInfoHTML}
     ${currencyHTML ? `<div style="margin:6px 0;">${currencyHTML}</div>` : ''}
     ${statusHTML ? `<div style="margin:6px 0;">${statusHTML}</div>` : ''}
     ${statsHTML ? `<div class="rpg-stat-grid">${statsHTML}</div>` : ''}
@@ -428,6 +453,29 @@ function enterEditMode(charId) {
         </div>
       </div>
     </div>
+    ${char.isNPC ? `
+    <details class="lore-section" style="margin-top:8px;" open>
+      <summary style="font-size:11px;color:#aaa;cursor:pointer;">NPC Info</summary>
+      <div style="display:flex;gap:6px;margin-top:4px;margin-bottom:4px;">
+        <div style="flex:1;">
+          <label style="font-size:10px;color:#888;">Disposition</label>
+          ${buildSelectHTML('npcDisposition', ['friendly','neutral','hostile','unknown'], char.disposition || 'unknown')}
+        </div>
+        <div style="flex:1;">
+          <label style="font-size:10px;color:#888;">NPC Role</label>
+          ${buildSelectHTML('npcRoleField', ['mentor','rival','shopkeeper','quest_giver','boss','ally','other'], char.npcRole || 'other')}
+        </div>
+      </div>
+      <div style="margin-bottom:4px;">
+        <label style="font-size:10px;color:#888;">Faction</label>
+        <input type="text" id="rpgEditFaction" value="${escapeHtml(char.faction || '')}" style="width:100%;${INPUT_STYLE}">
+      </div>
+      <div>
+        <label style="font-size:10px;color:#888;">Relationship to Party</label>
+        <input type="text" id="rpgEditNpcRelationship" value="${escapeHtml(char.npcRelationship || '')}" style="width:100%;${INPUT_STYLE}">
+      </div>
+    </details>
+    ` : ''}
     ${statsInputs ? `<div class="rpg-stat-grid">${statsInputs}</div>` : '<div style="font-size:10px;color:#666;">No stats to edit.</div>'}
 
     <details class="lore-section" style="margin-top:8px;" open>
@@ -544,6 +592,9 @@ function collectEditRows(containerId) {
 async function saveEdit(charId) {
   if (!rpgStatOverlayContent || !state.currentStoryId) return;
   editDirty = false;
+  const saveBtn = rpgStatOverlayContent.querySelector('.rpg-stat-save-btn');
+  const saveBtnOrigText = saveBtn?.textContent;
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
 
   const updates = {};
   const nameInput = rpgStatOverlayContent.querySelector('#rpgEditName');
@@ -612,19 +663,34 @@ async function saveEdit(charId) {
     }));
   }
 
-  const result = await window.sceneVisualizer.litrpgUpdateCharacter(state.currentStoryId, charId, updates);
-  if (result.success) {
-    state.litrpgState = result.state;
-    refreshRpgUI();
-    openStatOverlay(charId, getRpgState());
-    showToast('Character updated', 2000, 'success');
-  } else {
-    showToast(`Failed to save: ${result.error || 'Unknown error'}`, 3000, 'error');
+  // NPC-specific fields
+  const dispositionSelect = rpgStatOverlayContent.querySelector('[data-field="npcDisposition"]');
+  const npcRoleSelect = rpgStatOverlayContent.querySelector('[data-field="npcRoleField"]');
+  const factionInput = rpgStatOverlayContent.querySelector('#rpgEditFaction');
+  const npcRelInput = rpgStatOverlayContent.querySelector('#rpgEditNpcRelationship');
+  if (dispositionSelect) updates.disposition = dispositionSelect.value;
+  if (npcRoleSelect) updates.npcRole = npcRoleSelect.value;
+  if (factionInput) updates.faction = factionInput.value.trim() || null;
+  if (npcRelInput) updates.npcRelationship = npcRelInput.value.trim() || null;
+
+  try {
+    const result = await window.sceneVisualizer.litrpgUpdateCharacter(state.currentStoryId, charId, updates);
+    if (result.success) {
+      state.litrpgState = result.state;
+      refreshRpgUI();
+      openStatOverlay(charId, getRpgState());
+      showToast('Character updated', 2000, 'success');
+    } else {
+      showToast(`Failed to save: ${result.error || 'Unknown error'}`, 3000, 'error');
+    }
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = saveBtnOrigText || 'Save'; }
   }
 }
 
 async function deleteCharacter(charId) {
   if (!state.currentStoryId) return;
+  if (!confirm('Delete this character permanently? This cannot be undone.')) return;
   const result = await window.sceneVisualizer.litrpgDeleteCharacter(state.currentStoryId, charId);
   if (result.success) {
     state.litrpgState = result.state;
@@ -706,13 +772,13 @@ function highlightMatch(text, query) {
 
 function renderNPCs(rpg) {
   if (!rpgNpcList) return;
-  const allNpcs = Object.values(rpg.characters || {}).filter(c => c.isNPC);
-  let npcs = allNpcs;
+  const allNpcEntries = Object.entries(rpg.characters || {}).filter(([, c]) => c.isNPC);
+  let npcEntries = allNpcEntries;
 
   // Apply search filter (Phase 5F)
   if (npcSearchFilter) {
     const q = npcSearchFilter.toLowerCase();
-    npcs = npcs.filter(n =>
+    npcEntries = npcEntries.filter(([, n]) =>
       n.name.toLowerCase().includes(q) ||
       (n.faction || '').toLowerCase().includes(q) ||
       (n.disposition || '').toLowerCase().includes(q) ||
@@ -721,23 +787,56 @@ function renderNPCs(rpg) {
   }
 
   rpgNpcCount.textContent = npcSearchFilter
-    ? `(${npcs.length} of ${allNpcs.length})`
-    : `(${npcs.length})`;
+    ? `(${npcEntries.length} of ${allNpcEntries.length})`
+    : `(${npcEntries.length})`;
 
-  if (npcs.length === 0) {
+  if (npcEntries.length === 0) {
     rpgNpcList.innerHTML = '<div style="font-size:11px;color:#666;padding:4px;">No NPCs tracked yet.</div>';
     return;
   }
 
   const q = npcSearchFilter;
-  rpgNpcList.innerHTML = npcs.map(npc => `
-    <div class="rpg-npc-card">
-      <span class="rpg-npc-name">${highlightMatch(npc.name, q)}${npc.level ? ` (Lv.${npc.level})` : ''}${npc.class ? ` — ${highlightMatch(npc.class, q)}` : ''}</span>
-      ${npc.npcRole ? `<span style="font-size:9px;color:#a0a0ff;">${highlightMatch(npc.npcRole, q)}</span>` : ''}
-      ${npc.faction ? `<span style="font-size:9px;color:var(--cat-faction);">${highlightMatch(npc.faction, q)}</span>` : ''}
-      <span class="rpg-disposition ${npc.disposition || 'unknown'}">${highlightMatch((npc.disposition || 'unknown').toUpperCase(), q)}</span>
+  rpgNpcList.innerHTML = npcEntries.map(([id, npc]) => `
+    <div class="rpg-npc-card" data-char-id="${escapeHtml(id)}" style="cursor:pointer;">
+      <div class="rpg-portrait" style="width:28px;height:28px;flex-shrink:0;">
+        ${npc.portraitPath
+          ? `<img src="data:image/png;base64,${npc._thumbnailData || ''}" alt="${escapeHtml(npc.name)}" style="width:100%;height:100%;object-fit:cover;border-radius:4px;">`
+          : `<span class="rpg-portrait-placeholder"><svg width="20" height="20" viewBox="0 0 40 40" fill="#666" opacity="0.3"><ellipse cx="20" cy="14" rx="9" ry="10"/><ellipse cx="20" cy="42" rx="16" ry="14"/></svg></span>`}
+      </div>
+      <div style="flex:1;min-width:0;">
+        <span class="rpg-npc-name">${highlightMatch(npc.name, q)}${npc.level ? ` (Lv.${npc.level})` : ''}${npc.class ? ` — ${highlightMatch(npc.class, q)}` : ''}</span>
+        ${npc.npcRole ? `<span style="font-size:9px;color:#a0a0ff;">${highlightMatch(npc.npcRole, q)}</span>` : ''}
+        ${npc.faction ? `<span style="font-size:9px;color:var(--cat-faction);">${highlightMatch(npc.faction, q)}</span>` : ''}
+        <span class="rpg-disposition ${npc.disposition || 'unknown'}">${highlightMatch((npc.disposition || 'unknown').toUpperCase(), q)}</span>
+      </div>
+      <button class="rpg-npc-dismiss" data-char-id="${escapeHtml(id)}" title="Remove from tracking" style="font-size:10px;color:#ff6b6b;background:none;border:none;cursor:pointer;padding:2px 4px;flex-shrink:0;">✕</button>
     </div>
   `).join('');
+
+  // Click handlers for stat sheet overlay
+  rpgNpcList.querySelectorAll('.rpg-npc-card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      // Don't open stat sheet if dismiss button was clicked
+      if (e.target.closest('.rpg-npc-dismiss')) return;
+      openStatOverlay(card.dataset.charId, rpg);
+    });
+  });
+
+  // Dismiss button handlers
+  rpgNpcList.querySelectorAll('.rpg-npc-dismiss').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const charId = btn.dataset.charId;
+      const charName = rpg.characters?.[charId]?.name || 'this character';
+      if (!confirm(`Remove "${charName}" from LitRPG tracking?`)) return;
+      const result = await window.sceneVisualizer.litrpgDeleteCharacter(state.currentStoryId, charId);
+      if (result.success) {
+        state.litrpgState = result.state;
+        refreshRpgUI();
+        showToast(`${charName} removed`, 2000, 'success');
+      }
+    });
+  });
 }
 
 // =========================================================================
@@ -976,6 +1075,8 @@ async function generatePortrait(charId) {
   const char = rpg.characters?.[charId];
   if (!char) return;
 
+  const genBtn = rpgStatOverlayContent?.querySelector('.rpg-portrait-generate');
+  if (genBtn) genBtn.disabled = true;
   showToast('Generating portrait...');
   try {
     const result = await window.sceneVisualizer.portraitGenerate(
@@ -991,6 +1092,8 @@ async function generatePortrait(charId) {
     }
   } catch (err) {
     showToast('Portrait generation failed');
+  } finally {
+    if (genBtn) genBtn.disabled = false;
   }
 }
 
@@ -1011,6 +1114,126 @@ async function uploadPortrait(charId) {
     }
   } catch (err) {
     showToast('Portrait upload failed');
+  }
+}
+
+// =========================================================================
+// ALBUM
+// =========================================================================
+
+async function loadAlbumStrip(charId) {
+  if (!state.currentStoryId) return;
+  const strip = rpgStatOverlayContent?.querySelector('.rpg-album-strip');
+  const countEl = rpgStatOverlayContent?.querySelector('.rpg-album-count');
+  if (!strip) return;
+
+  try {
+    const items = await window.sceneVisualizer.portraitAlbumList(state.currentStoryId, charId);
+    if (countEl) countEl.textContent = `(${items.length})`;
+
+    if (items.length === 0) {
+      strip.innerHTML = '<div style="font-size:10px;color:#555;padding:4px;">No images yet. Generate or upload a portrait to start the album.</div>';
+      return;
+    }
+
+    strip.innerHTML = items.map(item => `
+      <div class="rpg-album-thumb" data-image-id="${escapeHtml(item.id)}" title="Click to view" style="position:relative;width:64px;height:64px;border-radius:4px;overflow:hidden;cursor:pointer;border:1px solid #333;flex-shrink:0;">
+        ${item.thumbnailData
+          ? `<img src="data:image/png;base64,${item.thumbnailData}" style="width:100%;height:100%;object-fit:cover;">`
+          : '<div style="width:100%;height:100%;background:#222;"></div>'}
+        <div class="rpg-album-actions" style="position:absolute;bottom:0;left:0;right:0;display:flex;gap:1px;opacity:0;transition:opacity 0.15s;">
+          <button class="rpg-album-use" data-image-id="${escapeHtml(item.id)}" title="Set as active portrait" style="flex:1;font-size:8px;padding:2px;background:rgba(0,120,255,0.8);color:#fff;border:none;cursor:pointer;">Use</button>
+          <button class="rpg-album-del" data-image-id="${escapeHtml(item.id)}" title="Delete" style="flex:0;font-size:8px;padding:2px 4px;background:rgba(200,0,0,0.8);color:#fff;border:none;cursor:pointer;">X</button>
+        </div>
+      </div>
+    `).join('');
+
+    // Wire click-to-view (full size in lightbox-style overlay)
+    strip.querySelectorAll('.rpg-album-thumb').forEach(el => {
+      el.addEventListener('mouseenter', () => {
+        const actions = el.querySelector('.rpg-album-actions');
+        if (actions) actions.style.opacity = '1';
+      });
+      el.addEventListener('mouseleave', () => {
+        const actions = el.querySelector('.rpg-album-actions');
+        if (actions) actions.style.opacity = '0';
+      });
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.rpg-album-use') || e.target.closest('.rpg-album-del')) return;
+        viewAlbumImage(charId, el.dataset.imageId);
+      });
+    });
+
+    // Wire "Use as active" buttons
+    strip.querySelectorAll('.rpg-album-use').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setAlbumAsActive(charId, btn.dataset.imageId);
+      });
+    });
+
+    // Wire delete buttons
+    strip.querySelectorAll('.rpg-album-del').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteAlbumImage(charId, btn.dataset.imageId);
+      });
+    });
+  } catch (err) {
+    strip.innerHTML = '<div style="font-size:10px;color:#f66;">Failed to load album</div>';
+    console.error('[LitRPG] Album load error:', err);
+  }
+}
+
+async function viewAlbumImage(charId, imageId) {
+  if (!state.currentStoryId) return;
+  try {
+    const imageData = await window.sceneVisualizer.portraitAlbumGet(state.currentStoryId, charId, imageId);
+    if (!imageData) return;
+
+    // Simple full-screen overlay for viewing
+    const viewer = document.createElement('div');
+    viewer.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;cursor:pointer;';
+    viewer.innerHTML = `<img src="data:image/png;base64,${imageData}" style="max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.5);">`;
+    viewer.addEventListener('click', () => viewer.remove());
+    document.body.appendChild(viewer);
+  } catch (err) {
+    showToast('Failed to load image');
+  }
+}
+
+async function setAlbumAsActive(charId, imageId) {
+  if (!state.currentStoryId) return;
+  try {
+    const result = await window.sceneVisualizer.portraitAlbumSetActive(state.currentStoryId, charId, imageId);
+    if (result.success) {
+      const rpg = getRpgState();
+      const char = rpg.characters?.[charId];
+      if (char) {
+        char.portraitPath = true;
+        char._portraitData = result.imageData;
+        char._thumbnailData = result.thumbnailData;
+        saveLitrpgState();
+      }
+      // Refresh stat overlay with new portrait
+      openStatOverlay(charId, getRpgState());
+      refreshRpgUI();
+      showToast('Portrait updated!');
+    }
+  } catch (err) {
+    showToast('Failed to set portrait');
+  }
+}
+
+async function deleteAlbumImage(charId, imageId) {
+  if (!state.currentStoryId) return;
+  try {
+    await window.sceneVisualizer.portraitAlbumDelete(state.currentStoryId, charId, imageId);
+    // Reload album strip
+    loadAlbumStrip(charId);
+    showToast('Album image deleted');
+  } catch (err) {
+    showToast('Failed to delete image');
   }
 }
 
@@ -1105,9 +1328,11 @@ async function runRpgScan() {
   } finally {
     state.litrpgScanning = false;
     if (scanElapsedTimer) { clearInterval(scanElapsedTimer); scanElapsedTimer = null; }
-    if (rpgScanPhase) rpgScanPhase.classList.remove('rpg-scan-pulsing');
-    if (rpgScanStatus) rpgScanStatus.style.display = 'none';
+    if (rpgScanPhase) { rpgScanPhase.classList.remove('rpg-scan-pulsing'); rpgScanPhase.textContent = 'Scan complete'; }
     if (rpgScanBtn) rpgScanBtn.disabled = false;
+    setTimeout(() => {
+      if (rpgScanStatus) rpgScanStatus.style.display = 'none';
+    }, 1500);
   }
 }
 
@@ -1115,6 +1340,8 @@ async function syncToLorebook() {
   const rpg = getRpgState();
   if (!rpg.enabled) return;
 
+  if (rpgSyncLorebookBtn) rpgSyncLorebookBtn.disabled = true;
+  try {
   const characters = Object.values(rpg.characters || {});
   let synced = 0;
 
@@ -1153,6 +1380,9 @@ async function syncToLorebook() {
   }
 
   showToast(synced > 0 ? `Synced ${synced} character${synced > 1 ? 's' : ''} to lorebook` : 'No characters to sync');
+  } finally {
+    if (rpgSyncLorebookBtn) rpgSyncLorebookBtn.disabled = false;
+  }
 }
 
 async function applyRoleUpdatesToLorebook(roleUpdates) {
@@ -1216,7 +1446,7 @@ async function reverseSyncFromLorebook() {
 
     // Filter to character entries (check @type metadata or category)
     const characterEntries = entries.filter(e => {
-      if (e.text && /^@type:\s*character/m.test(e.text)) return true;
+      if (e.text && parseMetadataClient(e.text).type === 'character') return true;
       // Fallback: check if it's in a characters category
       return e.category === 'character' || (e.text && /^Name:/m.test(e.text) && /^(Age|Gender|Physical Appearance):/m.test(e.text));
     });
@@ -1275,21 +1505,32 @@ function disableLitRPG() {
 // Bulk actions (Phase 5B)
 async function acceptAll() {
   if (!state.currentStoryId) return;
-  const result = await window.sceneVisualizer.litrpgAcceptAllUpdates(state.currentStoryId);
-  if (result.success) {
-    state.litrpgState = result.state;
-    refreshRpgUI();
-    showToast('All updates accepted');
+  if (rpgAcceptAllBtn) rpgAcceptAllBtn.disabled = true;
+  try {
+    const result = await window.sceneVisualizer.litrpgAcceptAllUpdates(state.currentStoryId);
+    if (result.success) {
+      state.litrpgState = result.state;
+      refreshRpgUI();
+      showToast('All updates accepted');
+    }
+  } finally {
+    if (rpgAcceptAllBtn) rpgAcceptAllBtn.disabled = false;
   }
 }
 
 async function rejectAll() {
   if (!state.currentStoryId) return;
-  const result = await window.sceneVisualizer.litrpgRejectAllUpdates(state.currentStoryId);
-  if (result.success) {
-    state.litrpgState = result.state;
-    refreshRpgUI();
-    showToast('All updates rejected');
+  if (!confirm('Reject all pending updates?')) return;
+  if (rpgRejectAllBtn) rpgRejectAllBtn.disabled = true;
+  try {
+    const result = await window.sceneVisualizer.litrpgRejectAllUpdates(state.currentStoryId);
+    if (result.success) {
+      state.litrpgState = result.state;
+      refreshRpgUI();
+      showToast('All updates rejected');
+    }
+  } finally {
+    if (rpgRejectAllBtn) rpgRejectAllBtn.disabled = false;
   }
 }
 
@@ -1314,16 +1555,39 @@ function setupIPCListeners() {
     }
   });
 
-  window.sceneVisualizer.onLitrpgStateUpdated((newState) => {
+  window.sceneVisualizer.onLitrpgStateUpdated(async (data) => {
+    // Support both old shape (raw state) and new shape ({ state, roleUpdates, pendingLoreEntries })
+    const newState = data.state || data;
     state.litrpgState = newState;
     state.litrpgEnabled = newState.enabled;
     refreshRpgUI();
+
+    // Process transient fields from chained RPG scan
+    if (data.roleUpdates && data.roleUpdates.length > 0) {
+      await applyRoleUpdatesToLorebook(data.roleUpdates);
+    }
+    if (data.pendingLoreEntries && data.pendingLoreEntries.length > 0) {
+      if (!state.loreState) state.loreState = { pendingEntries: [], rejectedNames: [] };
+      if (!state.loreState.pendingEntries) state.loreState.pendingEntries = [];
+      const existingNames = new Set((state.loreState.pendingEntries || []).map(e => e.displayName.toLowerCase()));
+      const rejectedNames = new Set((state.loreState.rejectedNames || []).map(n => n.toLowerCase()));
+      const newEntries = data.pendingLoreEntries.filter(e =>
+        !existingNames.has(e.displayName.toLowerCase()) && !rejectedNames.has(e.displayName.toLowerCase())
+      );
+      if (newEntries.length > 0) {
+        state.loreState.pendingEntries.push(...newEntries);
+        await saveLoreState();
+        refreshLoreUI();
+        showToast(`Found ${newEntries.length} RPG lore entr${newEntries.length === 1 ? 'y' : 'ies'} — check Lore tab`);
+      }
+    }
   });
 
   window.sceneVisualizer.onLitrpgDetected(({ systemType }) => {
     if (!state.litrpgState) state.litrpgState = {};
     state.litrpgState.detected = true;
     state.litrpgState.systemType = systemType;
+    saveLitrpgState();
     if (rpgTab) rpgTab.style.display = '';
     refreshRpgUI();
     showToast(`LitRPG story detected (${systemType})!`);

@@ -29,6 +29,7 @@ import {
   loreAddCategoryConfirm, loreAddCategoryCancel, dynamicCategoriesStyle,
 } from './dom-refs.js';
 import { escapeHtml, showToast } from './utils.js';
+import { parseMetadataClient } from './metadata.js';
 import { refreshMemoryUI } from './memory-manager.js';
 import { readStoryTextFromDOM, readMemoryFromDOM, writeMemoryToDOM } from './webview-polling.js';
 
@@ -742,6 +743,27 @@ function cycleCategoryBadge(badge, getCurrent, onChanged) {
   onChanged(next);
 }
 
+/** Build small colored badge HTML for metadata fields (skip @v and @updated as noise) */
+function buildMetaBadges(text) {
+  const meta = parseMetadataClient(text);
+  if (Object.keys(meta.all).length === 0) return '';
+  const BADGE_COLORS = {
+    source: { bg: '#1e3a5f', fg: '#60a5fa' },
+    role: { bg: '#3b1f5e', fg: '#c084fc' },
+    protagonist: { bg: '#5f1e1e', fg: '#f87171' },
+  };
+  const DEFAULT_COLOR = { bg: '#374151', fg: '#9ca3af' };
+  const SKIP = new Set(['type', 'v', 'updated']);
+  const badges = [];
+  for (const [key, val] of Object.entries(meta.all)) {
+    if (SKIP.has(key)) continue;
+    const c = BADGE_COLORS[key] || DEFAULT_COLOR;
+    const label = key === 'protagonist' ? '@protagonist' : `@${key}: ${val}`;
+    badges.push(`<span style="background:${c.bg};color:${c.fg};font-size:9px;padding:1px 4px;border-radius:3px;margin-left:4px;">${escapeHtml(label)}</span>`);
+  }
+  return badges.join('');
+}
+
 function createEntryCard(entry) {
   const card = document.createElement('div');
   card.className = `lore-card ${entry.category || ''}`;
@@ -754,11 +776,8 @@ function createEntryCard(entry) {
     ? `<button class="btn-reformat" data-action="reformat" data-id="${entry.id}" style="background:#4d96ff;color:#fff;border:none;padding:4px 8px;font-size:10px;border-radius:3px;cursor:pointer;">Reformat</button>`
     : '';
 
-  // Show @v2 badge if entry has metadata header
-  const hasMetaHeader = entry.text && /^@type:\s*\S/m.test(entry.text);
-  const metaBadge = hasMetaHeader
-    ? '<span style="background:#374151;color:#9ca3af;font-size:9px;padding:1px 4px;border-radius:3px;margin-left:4px;">@v2</span>'
-    : '';
+  // Build metadata badges from parsed header
+  const metaBadge = buildMetaBadges(entry.text);
 
   card.innerHTML = `
     <div class="lore-card-header">
@@ -775,6 +794,10 @@ function createEntryCard(entry) {
     </div>
   `;
 
+  card.querySelector('.lore-card-text').addEventListener('click', (e) => {
+    e.stopPropagation();
+    e.currentTarget.classList.toggle('expanded');
+  });
   card.querySelector('.category-badge').addEventListener('click', (e) => {
     e.stopPropagation();
     cycleCategoryBadge(e.target, () => entry.category, (newCat) => {
@@ -809,6 +832,10 @@ function createMergeCard(merge) {
     </div>
   `;
 
+  card.querySelector('.lore-card-text').addEventListener('click', (e) => {
+    e.stopPropagation();
+    e.currentTarget.classList.toggle('expanded');
+  });
   card.querySelector('.category-badge').addEventListener('click', (e) => {
     e.stopPropagation();
     cycleCategoryBadge(e.target, () => merge.newCategory, (newCat) => {
@@ -928,10 +955,8 @@ async function acceptEntry(entryId) {
   try {
     // Determine category: prefer @type metadata if present, fall back to entry.category
     let entryCategory = entry.category;
-    if (entry.text && /^@type:\s*\S/m.test(entry.text)) {
-      const metaMatch = entry.text.match(/^@type:\s*(\S+)/m);
-      if (metaMatch) entryCategory = metaMatch[1];
-    }
+    const entryMeta = parseMetadataClient(entry.text);
+    if (entryMeta.type) entryCategory = entryMeta.type;
     const categoryId = await getCategoryForType(entryCategory);
 
     const entryData = {
@@ -971,17 +996,17 @@ async function rejectEntry(entryId) {
   refreshLoreUI();
 }
 
-// Edit entry (inline)
+// Edit entry (inline) — strips metadata header from textarea, re-prepends on save
 function editEntry(entryId, card) {
   const entry = (state.loreState.pendingEntries || []).find(e => e.id === entryId);
   if (!entry) return;
 
   const textDiv = card.querySelector('.lore-card-text');
-  const currentText = entry.text;
+  const meta = parseMetadataClient(entry.text);
 
   const textarea = document.createElement('textarea');
   textarea.className = 'lore-edit-area';
-  textarea.value = currentText;
+  textarea.value = meta.rest;
   textDiv.replaceWith(textarea);
 
   const actions = card.querySelector('.lore-card-actions');
@@ -990,7 +1015,22 @@ function editEntry(entryId, card) {
     <button class="btn-reject">Cancel</button>
   `;
   actions.querySelector('.btn-accept').addEventListener('click', async () => {
-    entry.text = textarea.value;
+    // Re-prepend original metadata with updated timestamp, including custom keys
+    const today = new Date().toISOString().slice(0, 10);
+    const knownKeys = new Set(['type', 'v', 'updated', 'source', 'role', 'protagonist']);
+    const extras = {};
+    for (const [k, v] of Object.entries(meta.all)) {
+      if (!knownKeys.has(k)) extras[k] = v;
+    }
+    entry.text = await window.sceneVisualizer.loreSetMetadata(textarea.value, {
+      ...(meta.type ? { type: meta.type } : {}),
+      ...(meta.version ? { version: meta.version } : {}),
+      ...(meta.source ? { source: meta.source } : {}),
+      ...(meta.role ? { role: meta.role } : {}),
+      ...(meta.protagonist ? { protagonist: meta.protagonist } : {}),
+      updated: today,
+      extras,
+    });
     await saveLoreState();
     refreshLoreUI();
   });
@@ -1021,10 +1061,29 @@ async function acceptMerge(mergeId) {
     return;
   }
 
+  // Merge metadata: proposed wins for content keys, existing @role/@protagonist preserved if absent in proposed
+  let mergedText = merge.proposedText;
+  if (existing.text) {
+    const existingMeta = parseMetadataClient(existing.text);
+    const proposedMeta = parseMetadataClient(merge.proposedText);
+    const preserveFields = {};
+    if (existingMeta.role && !proposedMeta.role) preserveFields.role = existingMeta.role;
+    if (existingMeta.protagonist && !proposedMeta.protagonist) preserveFields.protagonist = existingMeta.protagonist;
+    // Preserve custom keys from existing that aren't in proposed
+    const knownKeys = new Set(['type', 'v', 'updated', 'source', 'role', 'protagonist']);
+    const extras = {};
+    for (const [k, v] of Object.entries(existingMeta.all)) {
+      if (!knownKeys.has(k) && !(k in proposedMeta.all)) extras[k] = v;
+    }
+    if (Object.keys(preserveFields).length > 0 || Object.keys(extras).length > 0) {
+      mergedText = await window.sceneVisualizer.loreSetMetadata(merge.proposedText, { ...preserveFields, extras });
+    }
+  }
+
   const mergePayload = {
     displayName: merge.proposedDisplayName,
     keys: merge.proposedKeys,
-    text: merge.proposedText,
+    text: mergedText,
   };
   if (merge.newCategory) {
     const catId = await getCategoryForType(merge.newCategory);
@@ -1055,15 +1114,17 @@ async function rejectMerge(mergeId) {
   refreshLoreUI();
 }
 
-// Edit merge (inline)
+// Edit merge (inline) — strips metadata header from textarea, re-prepends on save
 function editMerge(mergeId, card) {
   const merge = (state.loreState.pendingMerges || []).find(m => m.id === mergeId);
   if (!merge) return;
 
   const textDiv = card.querySelector('.lore-card-text');
+  const meta = parseMetadataClient(merge.proposedText);
+
   const textarea = document.createElement('textarea');
   textarea.className = 'lore-edit-area';
-  textarea.value = merge.proposedText;
+  textarea.value = meta.rest;
   textDiv.replaceWith(textarea);
 
   const actions = card.querySelector('.lore-card-actions');
@@ -1072,7 +1133,22 @@ function editMerge(mergeId, card) {
     <button class="btn-reject">Cancel</button>
   `;
   actions.querySelector('.btn-accept').addEventListener('click', async () => {
-    merge.proposedText = textarea.value;
+    // Re-prepend original metadata with updated timestamp, including custom keys
+    const today = new Date().toISOString().slice(0, 10);
+    const knownKeys = new Set(['type', 'v', 'updated', 'source', 'role', 'protagonist']);
+    const extras = {};
+    for (const [k, v] of Object.entries(meta.all)) {
+      if (!knownKeys.has(k)) extras[k] = v;
+    }
+    merge.proposedText = await window.sceneVisualizer.loreSetMetadata(textarea.value, {
+      ...(meta.type ? { type: meta.type } : {}),
+      ...(meta.version ? { version: meta.version } : {}),
+      ...(meta.source ? { source: meta.source } : {}),
+      ...(meta.role ? { role: meta.role } : {}),
+      ...(meta.protagonist ? { protagonist: meta.protagonist } : {}),
+      updated: today,
+      extras,
+    });
     await saveLoreState();
     refreshLoreUI();
   });
@@ -1230,12 +1306,15 @@ async function runLoreScan(scanType = 'all') {
     showLoreError(e.message || 'Scan failed');
   } finally {
     loreScanProgressFill.style.width = '100%';
-    setTimeout(() => { loreScanProgressFill.style.width = '0%'; }, 500);
+    loreScanPhase.textContent = 'Scan complete';
     state.loreIsScanning = false;
     loreScanBtn.disabled = false;
-    loreScanStatus.style.display = 'none';
     refreshLoreUI();
     buildFamilyTree();
+    setTimeout(() => {
+      loreScanStatus.style.display = 'none';
+      loreScanProgressFill.style.width = '0%';
+    }, 1500);
   }
 }
 
@@ -2631,7 +2710,11 @@ export function init() {
         return;
       }
 
-      await window.sceneVisualizer.loreStartProgressiveScan(state.currentStoryId, storyText);
+      // Fetch lorebook entries for category-aware entity extraction
+      let entries = [];
+      try { entries = await loreCall('getEntries'); } catch (_) { /* best-effort */ }
+
+      await window.sceneVisualizer.loreStartProgressiveScan(state.currentStoryId, storyText, entries);
     } catch (e) {
       comprehensionStatusText.textContent = 'Error: ' + (e.message || 'Scan failed');
     } finally {
@@ -2705,8 +2788,10 @@ export function init() {
         console.log(`[Comprehension] Auto-incremental update: ${newChars} new chars`);
 
         let storyText = await loreCall('getStoryText');
+        let entries = [];
+        try { entries = await loreCall('getEntries'); } catch (_) { /* best-effort */ }
 
-        await window.sceneVisualizer.loreIncrementalUpdate(state.currentStoryId, storyText);
+        await window.sceneVisualizer.loreIncrementalUpdate(state.currentStoryId, storyText, entries);
         await loadComprehensionState();
         state.comprehensionAutoUpdatePending = false;
       }
