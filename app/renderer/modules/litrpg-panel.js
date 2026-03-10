@@ -14,12 +14,17 @@ import {
   rpgUpdatesList, rpgUpdatesSection, rpgUpdatesCount,
   rpgAutoScan, rpgAutoSync, rpgDisableBtn,
   rpgAcceptAllBtn, rpgRejectAllBtn,
-  rpgNpcSearch,
+  rpgNpcSearch, rpgNpcGroupBtn,
   rpgInventoryList, rpgCurrencyList, rpgStatusEffectsList,
   rpgStatOverlay, rpgStatOverlayContent, rpgStatOverlayClose,
   rpgFactionList, rpgFactionCount,
   rpgClassList, rpgClassCount,
   rpgRaceList, rpgRaceCount,
+  rpgScanSteps, rpgScanElapsed,
+  rpgScanHistorySection, rpgScanHistoryCount, rpgScanHistoryList,
+  rpgDetectedType,
+  rpgAlbumLightbox, rpgAlbumLightboxImg, rpgAlbumPrev, rpgAlbumNext,
+  rpgAlbumCounter, rpgAlbumSetActive, rpgAlbumDelete, rpgAlbumClose,
   webview,
 } from './dom-refs.js';
 import { escapeHtml, showToast } from './utils.js';
@@ -122,6 +127,9 @@ export function refreshRpgUI() {
   renderFactions(rpg);
   renderClasses(rpg);
   renderRaces(rpg);
+
+  // Scan history (Phase 6.5)
+  renderScanHistory(rpg);
 }
 
 // =========================================================================
@@ -137,26 +145,38 @@ function renderParty(rpg) {
   rpgPartyCount.textContent = `(${partyMembers.length})`;
 
   if (partyMembers.length === 0) {
-    rpgPartyList.innerHTML = '<div style="font-size:11px;color:#666;padding:4px;">No party members detected yet.</div>';
+    rpgPartyList.innerHTML = `<div class="rpg-party-empty">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2L4 7v6c0 5.5 3.4 10.7 8 12 4.6-1.3 8-6.5 8-12V7l-8-5z"/></svg>
+      <div style="font-size:11px;">No party members detected yet.</div>
+    </div>`;
     return;
   }
 
-  rpgPartyList.innerHTML = partyMembers.map(char => `
-    <div class="rpg-character-card" data-char-id="${escapeHtml(char.id)}">
-      <div class="rpg-portrait">
-        ${char.portraitPath
-          ? `<img src="data:image/png;base64,${char._thumbnailData || ''}" alt="${escapeHtml(char.name)}">`
-          : `<span class="rpg-portrait-placeholder"><svg width="28" height="28" viewBox="0 0 40 40" fill="#666" opacity="0.3"><ellipse cx="20" cy="14" rx="9" ry="10"/><ellipse cx="20" cy="42" rx="16" ry="14"/></svg></span>`}
+  rpgPartyList.innerHTML = partyMembers.map(char => {
+    const roleColor = ROLE_COLORS[char.partyRole || 'party-member'] || ROLE_COLORS['party-member'];
+    const roleLabel = ROLE_LABELS[char.partyRole || 'party-member'] || 'Party Member';
+    const xpPct = (char.xp?.current != null && char.xp?.needed) ? Math.min(100, (char.xp.current / char.xp.needed) * 100) : 0;
+    return `
+    <div class="rpg-character-card-v2" data-char-id="${escapeHtml(char.id)}">
+      <div class="rpg-card-bg-gradient" style="background:linear-gradient(90deg, ${roleColor}14 0%, transparent 100%);"></div>
+      <div class="rpg-portrait-ring" style="border: 2px solid ${roleColor};">
+        <div class="rpg-portrait-inner">
+          ${char.portraitPath
+            ? `<img src="data:image/png;base64,${char._thumbnailData || ''}" alt="${escapeHtml(char.name)}">`
+            : `<svg width="24" height="24" viewBox="0 0 40 40" fill="#666" opacity="0.3"><ellipse cx="20" cy="14" rx="9" ry="10"/><ellipse cx="20" cy="42" rx="16" ry="14"/></svg>`}
+        </div>
+        ${char.level ? `<span class="rpg-level-badge">${char.level}</span>` : ''}
       </div>
-      <div class="rpg-char-info">
+      <div class="rpg-char-info" style="position:relative;z-index:1;">
         <div class="rpg-char-name">${escapeHtml(char.name)}</div>
-        <div class="rpg-char-class">${char.level ? `Lv.${char.level} ` : ''}${escapeHtml(char.class || 'Unknown Class')}${char.role ? ` (${escapeHtml(char.role)})` : ''}</div>
+        <div class="rpg-char-class">${escapeHtml(char.class || 'Unknown Class')}${char.role ? ` (${escapeHtml(char.role)})` : ''}</div>
+        <span class="rpg-card-role-dot" style="color:${roleColor};">${escapeHtml(roleLabel)}</span>
       </div>
-    </div>
-  `).join('');
+      ${xpPct > 0 ? `<div class="rpg-card-xp-bar"><div class="rpg-card-xp-fill" style="width:${xpPct}%;"></div></div>` : ''}
+    </div>`;
+  }).join('');
 
-  // Click handlers for stat sheet overlay (Phase 5H)
-  rpgPartyList.querySelectorAll('.rpg-character-card').forEach(card => {
+  rpgPartyList.querySelectorAll('.rpg-character-card-v2').forEach(card => {
     card.addEventListener('click', () => openStatOverlay(card.dataset.charId, rpg));
   });
 }
@@ -189,7 +209,7 @@ function openStatOverlay(charId, rpg) {
   if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCharacter(charId));
 
   // Wire role cycle chip
-  const roleChip = rpgStatOverlayContent.querySelector('.rpg-role-chip');
+  const roleChip = rpgStatOverlayContent.querySelector('.rpg-role-chip-styled');
   if (roleChip) roleChip.addEventListener('click', () => cycleRole(charId));
 
   // Load album
@@ -197,8 +217,23 @@ function openStatOverlay(charId, rpg) {
 }
 
 function closeStatOverlay() {
-  if (editDirty && !confirm('Discard unsaved changes?')) return;
-  editDirty = false;
+  if (editDirty) {
+    // Check if confirm bar already shown
+    const existing = rpgStatOverlayContent?.querySelector('.rpg-confirm-bar');
+    if (existing) return;
+    const bar = document.createElement('div');
+    bar.className = 'rpg-confirm-bar';
+    bar.innerHTML = `<span>Unsaved changes.</span>
+      <button class="btn-reject" style="font-size:10px;padding:2px 8px;">Discard</button>
+      <button class="btn-accept" style="font-size:10px;padding:2px 8px;">Keep Editing</button>`;
+    bar.querySelector('.btn-reject').addEventListener('click', () => {
+      editDirty = false;
+      if (rpgStatOverlay) rpgStatOverlay.style.display = 'none';
+    });
+    bar.querySelector('.btn-accept').addEventListener('click', () => bar.remove());
+    rpgStatOverlayContent?.prepend(bar);
+    return;
+  }
   if (rpgStatOverlay) rpgStatOverlay.style.display = 'none';
 }
 
@@ -259,7 +294,8 @@ function buildStatSheetHTML(char) {
     let extras = '';
     if (e.bonuses) extras += ` <span class="rpg-equip-bonus">{${escapeHtml(e.bonuses)}}</span>`;
     if (e.setName) extras += ` <span class="rpg-equip-set">[${escapeHtml(e.setName)}]</span>`;
-    return `<div class="rpg-equip-item">${escapeHtml(e.name)} [${escapeHtml(e.slot || 'other')}]${e.rarity && e.rarity !== 'unknown' ? ` <span class="rpg-rarity rpg-rarity-${e.rarity}">${e.rarity}</span>` : ''}${extras} — ${escapeHtml(e.description || '')}</div>`;
+    const rarityClass = e.rarity && e.rarity !== 'unknown' ? ` rarity-${e.rarity}` : '';
+    return `<div class="rpg-equip-item${rarityClass}">${escapeHtml(e.name)} [${escapeHtml(e.slot || 'other')}]${e.rarity && e.rarity !== 'unknown' ? ` <span class="rpg-rarity rpg-rarity-${e.rarity}">${e.rarity}</span>` : ''}${extras} — ${escapeHtml(e.description || '')}</div>`;
   }).join('');
 
   const inventoryHTML = (char.inventory || []).map(i =>
@@ -267,32 +303,37 @@ function buildStatSheetHTML(char) {
   ).join('');
 
   const currencyHTML = Object.entries(char.currency || {}).length > 0
-    ? Object.entries(char.currency).map(([unit, amount]) => `<span class="rpg-currency-tag">${amount} ${escapeHtml(unit)}</span>`).join(' ')
+    ? `<div class="rpg-section-card rpg-currency-section"><h4>Currency</h4><div style="display:flex;flex-wrap:wrap;gap:6px;">${Object.entries(char.currency).map(([unit, amount]) =>
+        `<div class="rpg-currency-card"><span class="rpg-currency-amount">${amount}</span><span class="rpg-currency-unit">${escapeHtml(unit)}</span></div>`
+      ).join('')}</div></div>`
     : '';
 
-  const statusHTML = (char.statusEffects || []).map(s =>
-    `<span class="rpg-status-tag rpg-status-${s.type || 'buff'}">${escapeHtml(s.name)}${s.duration ? ` [${escapeHtml(s.duration)}]` : ''}</span>`
-  ).join(' ');
+  const statusHTML = (char.statusEffects || []).length > 0
+    ? `<div class="rpg-section-card rpg-status-section"><h4>Status Effects</h4><div class="rpg-status-tag-row">${(char.statusEffects || []).map(s =>
+        `<span class="rpg-status-tag rpg-status-${s.type || 'buff'}">${s.type === 'buff' ? '&#9650;' : s.type === 'debuff' ? '&#9660;' : '&#9679;'} ${escapeHtml(s.name)}${s.duration ? ` [${escapeHtml(s.duration)}]` : ''}</span>`
+      ).join('')}</div></div>`
+    : '';
 
+  const xpPct = (char.xp?.current != null && char.xp?.needed) ? Math.min(100, (char.xp.current / char.xp.needed) * 100) : 0;
   const xpHTML = char.xp && (char.xp.current != null || char.xp.needed != null)
-    ? `<div class="rpg-xp-bar"><span style="font-size:10px;color:#aaa;">XP: ${char.xp.current ?? '?'} / ${char.xp.needed ?? '?'}</span>${char.xp.current != null && char.xp.needed ? `<div class="rpg-xp-fill" style="width:${Math.min(100, (char.xp.current / char.xp.needed) * 100)}%;"></div>` : ''}</div>`
+    ? `<div class="rpg-xp-bar-v2"><div class="rpg-xp-fill" style="width:${xpPct}%;"></div><span class="rpg-xp-text">XP: ${char.xp.current ?? '?'} / ${char.xp.needed ?? '?'} (${Math.round(xpPct)}%)</span></div>`
     : '';
 
   const cultivationHTML = char.cultivationRealm
     ? `<div style="font-size:11px;color:#d4a574;margin-top:4px;">Cultivation: ${escapeHtml(char.cultivationRealm)}${char.cultivationStage ? ` (${escapeHtml(char.cultivationStage)})` : ''}</div>`
     : '';
 
-  // Role chip (party-member, companion, summon, pet, mount, npc)
+  // Role chip
   const currentRole = char.partyRole || (char.isPartyMember ? 'party-member' : (char.isNPC ? 'npc' : null));
   const roleLabel = currentRole ? (ROLE_LABELS[currentRole] || currentRole) : 'Unclassified';
   const roleColor = currentRole ? (ROLE_COLORS[currentRole] || '#666') : '#666';
-  const roleChipHTML = `<button class="rpg-role-chip" data-role="${escapeHtml(currentRole || '')}" title="Click to cycle role" style="font-size:9px;padding:1px 8px;margin-top:3px;background:transparent;color:${roleColor};border:1px solid ${roleColor};border-radius:10px;cursor:pointer;display:inline-block;">${escapeHtml(roleLabel)}</button>`;
+  const roleChipHTML = `<button class="rpg-role-chip-styled" data-role="${escapeHtml(currentRole || '')}" title="Click to cycle role" style="color:${roleColor};border-color:${roleColor};background:${roleColor}26;">${escapeHtml(roleLabel)}</button>`;
 
-  // NPC info section (disposition, faction, role, relationship)
+  // NPC info section
   const DISPOSITION_COLORS = { friendly: '#81c784', neutral: '#ffd54f', hostile: '#ff6b6b', unknown: '#90a4ae' };
   const npcInfoHTML = char.isNPC ? `
-    <div style="margin:6px 0;padding:6px 8px;background:rgba(144,164,174,0.1);border-radius:4px;border:1px solid rgba(144,164,174,0.2);">
-      <div style="font-size:10px;color:#90a4ae;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">NPC Info</div>
+    <div class="rpg-section-card rpg-npc-info-box">
+      <div class="rpg-npc-info-label">NPC Info</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
         ${char.disposition ? `<span style="font-size:10px;padding:1px 8px;border-radius:10px;border:1px solid ${DISPOSITION_COLORS[char.disposition] || DISPOSITION_COLORS.unknown};color:${DISPOSITION_COLORS[char.disposition] || DISPOSITION_COLORS.unknown};">${escapeHtml(char.disposition)}</span>` : ''}
         ${char.npcRole ? `<span style="font-size:10px;color:#a0a0ff;">${escapeHtml(char.npcRole)}</span>` : ''}
@@ -304,25 +345,25 @@ function buildStatSheetHTML(char) {
 
   return `
     <div class="rpg-stat-header">
-      <div class="rpg-portrait-large">
+      <div class="rpg-portrait-large-v2" style="border: 3px solid ${roleColor}; border-radius: 8px;">
         ${char.portraitPath
           ? `<img src="data:image/png;base64,${char._portraitData || ''}" alt="${escapeHtml(char.name)}">`
-          : `<svg width="40" height="40" viewBox="0 0 40 40" fill="#666" opacity="0.3"><ellipse cx="20" cy="14" rx="9" ry="10"/><ellipse cx="20" cy="42" rx="16" ry="14"/></svg>`}
+          : `<svg width="48" height="48" viewBox="0 0 40 40" fill="#666" opacity="0.3"><ellipse cx="20" cy="14" rx="9" ry="10"/><ellipse cx="20" cy="42" rx="16" ry="14"/></svg>`}
         <div class="rpg-portrait-actions">
-          <button class="rpg-portrait-generate" title="Generate Portrait">Gen</button>
-          <button class="rpg-portrait-upload" title="Upload Portrait">Up</button>
+          <button class="rpg-portrait-generate" title="Generate Portrait"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></button>
+          <button class="rpg-portrait-upload" title="Upload Portrait"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg></button>
         </div>
       </div>
       <div style="flex:1;">
-        <h3>${escapeHtml(char.name)}</h3>
-        <div style="font-size:11px;color:var(--cat-rpg);">${char.level ? `Level ${char.level} ` : ''}${escapeHtml(char.class || '')}${char.subclass ? ` / ${escapeHtml(char.subclass)}` : ''}${char.race ? ` (${escapeHtml(char.race)})` : ''}</div>
+        <h3 class="rpg-stat-title">${escapeHtml(char.name)}</h3>
+        <div class="rpg-stat-subtitle">${char.level ? `Level ${char.level} ` : ''}${escapeHtml(char.class || '')}${char.subclass ? ` / ${escapeHtml(char.subclass)}` : ''}${char.race ? ` (${escapeHtml(char.race)})` : ''}</div>
         ${roleChipHTML}
         ${cultivationHTML}
         ${xpHTML}
       </div>
-      <div style="display:flex;gap:4px;">
-        <button class="rpg-stat-edit-btn" title="Edit" style="font-size:10px;padding:2px 8px;background:var(--bg-input);color:#aaa;border:1px solid #444;border-radius:4px;cursor:pointer;">Edit</button>
-        <button class="rpg-char-delete-btn" title="Delete" style="font-size:10px;padding:2px 8px;background:#3a1a1a;color:#ff6b6b;border:1px solid #ff6b6b;border-radius:4px;cursor:pointer;">Del</button>
+      <div class="rpg-stat-actions">
+        <button class="rpg-stat-edit-btn" title="Edit"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.1 2.1 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+        <button class="rpg-char-delete-btn" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>
       </div>
     </div>
     <details class="rpg-album-section" style="margin:8px 0;">
@@ -332,12 +373,12 @@ function buildStatSheetHTML(char) {
       </div>
     </details>
     ${npcInfoHTML}
-    ${currencyHTML ? `<div style="margin:6px 0;">${currencyHTML}</div>` : ''}
-    ${statusHTML ? `<div style="margin:6px 0;">${statusHTML}</div>` : ''}
-    ${statsHTML ? `<div class="rpg-stat-grid">${statsHTML}</div>` : ''}
-    ${abilitiesHTML ? `<div class="rpg-abilities"><h4>Abilities</h4>${abilitiesHTML}</div>` : ''}
-    ${equipmentHTML ? `<div class="rpg-equipment"><h4>Equipment</h4>${equipmentHTML}</div>` : ''}
-    ${inventoryHTML ? `<div class="rpg-equipment"><h4>Inventory</h4>${inventoryHTML}</div>` : ''}
+    ${currencyHTML}
+    ${statusHTML}
+    ${statsHTML ? `<div class="rpg-section-card"><h4>Stats</h4><div class="rpg-stat-grid">${statsHTML}</div></div>` : ''}
+    ${abilitiesHTML ? `<div class="rpg-section-card"><h4>Abilities</h4>${abilitiesHTML}</div>` : ''}
+    ${equipmentHTML ? `<div class="rpg-section-card"><h4>Equipment</h4>${equipmentHTML}</div>` : ''}
+    ${inventoryHTML ? `<div class="rpg-section-card"><h4>Inventory</h4>${inventoryHTML}</div>` : ''}
   `;
 }
 
@@ -349,6 +390,7 @@ let editDirty = false;
 
 function markEditDirty() { editDirty = true; }
 
+// Legacy INPUT_STYLE kept for buildSelectHTML compatibility; new code uses .rpg-edit-input class
 const INPUT_STYLE = 'background:var(--bg-input);color:#fff;border:1px solid #555;border-radius:3px;padding:2px 6px;font-size:11px;';
 const SLOT_OPTIONS = ['weapon','off-hand','shield','helmet','armor','legs','boots','gloves','ring','amulet','cloak','belt','bracers','earring','trinket','accessory','other'];
 const RARITY_OPTIONS = ['common','uncommon','rare','epic','legendary','unknown'];
@@ -551,8 +593,19 @@ function enterEditMode(charId) {
   const cancelBtn = rpgStatOverlayContent.querySelector('.rpg-stat-cancel-btn');
   if (saveBtn) saveBtn.addEventListener('click', () => saveEdit(charId));
   if (cancelBtn) cancelBtn.addEventListener('click', () => {
-    if (editDirty && !confirm('Discard unsaved changes?')) return;
-    editDirty = false;
+    if (editDirty) {
+      const existing = rpgStatOverlayContent?.querySelector('.rpg-confirm-bar');
+      if (existing) return;
+      const bar = document.createElement('div');
+      bar.className = 'rpg-confirm-bar';
+      bar.innerHTML = `<span>Unsaved changes.</span>
+        <button class="btn-reject" style="font-size:10px;padding:2px 8px;">Discard</button>
+        <button class="btn-accept" style="font-size:10px;padding:2px 8px;">Keep Editing</button>`;
+      bar.querySelector('.btn-reject').addEventListener('click', () => { editDirty = false; openStatOverlay(charId, getRpgState()); });
+      bar.querySelector('.btn-accept').addEventListener('click', () => bar.remove());
+      rpgStatOverlayContent?.prepend(bar);
+      return;
+    }
     openStatOverlay(charId, getRpgState());
   });
 }
@@ -690,16 +743,28 @@ async function saveEdit(charId) {
 
 async function deleteCharacter(charId) {
   if (!state.currentStoryId) return;
-  if (!confirm('Delete this character permanently? This cannot be undone.')) return;
-  const result = await window.sceneVisualizer.litrpgDeleteCharacter(state.currentStoryId, charId);
-  if (result.success) {
-    state.litrpgState = result.state;
-    closeStatOverlay();
-    refreshRpgUI();
-    showToast('Character deleted', 2000, 'success');
-  } else {
-    showToast(`Failed to delete: ${result.error || 'Unknown error'}`, 3000, 'error');
-  }
+  // Show inline confirmation in stat overlay
+  const existing = rpgStatOverlayContent?.querySelector('.rpg-confirm-bar');
+  if (existing) existing.remove();
+  const bar = document.createElement('div');
+  bar.className = 'rpg-confirm-bar';
+  bar.innerHTML = `<span>Delete this character permanently?</span>
+    <button class="btn-reject" style="font-size:10px;padding:2px 8px;">Delete</button>
+    <button style="font-size:10px;padding:2px 8px;background:var(--bg-input);color:#aaa;border:1px solid #444;border-radius:4px;cursor:pointer;">Cancel</button>`;
+  bar.querySelector('.btn-reject').addEventListener('click', async () => {
+    const result = await window.sceneVisualizer.litrpgDeleteCharacter(state.currentStoryId, charId);
+    if (result.success) {
+      state.litrpgState = result.state;
+      editDirty = false;
+      if (rpgStatOverlay) rpgStatOverlay.style.display = 'none';
+      refreshRpgUI();
+      showToast('Character deleted', 2000, 'success');
+    } else {
+      showToast(`Failed to delete: ${result.error || 'Unknown error'}`, 3000, 'error');
+    }
+  });
+  bar.querySelector('button:last-child').addEventListener('click', () => bar.remove());
+  rpgStatOverlayContent?.prepend(bar);
 }
 
 // =========================================================================
@@ -727,26 +792,26 @@ function renderQuests(rpg) {
 
 function buildQuestCardHTML(quest) {
   const objectives = (quest.objectives || []).map(o =>
-    `<div class="rpg-objective${o.completed ? ' completed' : ''}">${escapeHtml(o.text)}</div>`
+    `<div class="rpg-objective-v2${o.completed ? ' completed' : ''}"><span class="rpg-obj-check">${o.completed ? '<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>' : ''}</span>${escapeHtml(o.text)}</div>`
   ).join('');
 
-  const meta = [
-    quest.giver ? `Giver: ${escapeHtml(quest.giver)}` : null,
-    quest.rewards ? `Reward: ${escapeHtml(quest.rewards)}` : null,
-  ].filter(Boolean).join(' | ');
+  const metaParts = [];
+  if (quest.giver) metaParts.push(`Giver: ${escapeHtml(quest.giver)}`);
+  if (quest.rewards) metaParts.push(`<span class="rpg-quest-reward">${escapeHtml(quest.rewards)}</span>`);
+  const meta = metaParts.join(' ');
 
-  // Quest progress bar (Phase 5D)
   const totalObj = (quest.objectives || []).length;
   const completedObj = (quest.objectives || []).filter(o => o.completed).length;
   const progressPct = totalObj > 0 ? Math.round((completedObj / totalObj) * 100) : 0;
   const progressBar = totalObj > 0
-    ? `<div class="rpg-quest-progress"><div class="rpg-quest-progress-fill" style="width:${progressPct}%;"></div><span class="rpg-quest-progress-text">${completedObj}/${totalObj} (${progressPct}%)</span></div>`
+    ? `<div class="rpg-quest-progress-v2"><div class="rpg-quest-progress-fill" style="width:${progressPct}%;"></div><span class="rpg-quest-progress-text">${completedObj}/${totalObj} (${progressPct}%)</span></div>`
     : '';
 
+  const questType = quest.type || 'side';
   return `
-    <div class="rpg-quest-card ${quest.status}">
+    <div class="rpg-quest-card-v2 type-${questType} ${quest.status}">
       <div class="rpg-quest-header">
-        <span class="rpg-quest-type ${quest.type || 'side'}">${escapeHtml((quest.type || 'side').toUpperCase())}</span>
+        <span class="rpg-quest-type ${questType}">${escapeHtml(questType.toUpperCase())}</span>
         <span class="rpg-quest-title">${escapeHtml(quest.title)}</span>
       </div>
       ${quest.description ? `<div class="rpg-quest-desc">${escapeHtml(quest.description)}</div>` : ''}
@@ -762,12 +827,35 @@ function buildQuestCardHTML(quest) {
 // =========================================================================
 
 let npcSearchFilter = '';
+let npcGroupByDisposition = false;
 
 function highlightMatch(text, query) {
   if (!query) return escapeHtml(text);
   const escaped = escapeHtml(text);
   const re = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
   return escaped.replace(re, '<mark style="background:rgba(233,69,96,0.3);color:inherit;padding:0 1px;border-radius:2px;">$1</mark>');
+}
+
+function buildNpcCardHTML(id, npc, q) {
+  const DISP_RING_COLORS = { friendly: '#81c784', neutral: '#ffd54f', hostile: '#ff6b6b', unknown: '#90a4ae' };
+  const dispColor = DISP_RING_COLORS[npc.disposition] || DISP_RING_COLORS.unknown;
+  return `
+  <div class="rpg-npc-card rpg-clickable" data-char-id="${escapeHtml(id)}" style="cursor:pointer;">
+    <div class="rpg-portrait" style="width:28px;height:28px;flex-shrink:0;border: 2px solid ${dispColor};border-radius:50%;">
+      ${npc.portraitPath
+        ? `<img src="data:image/png;base64,${npc._thumbnailData || ''}" alt="${escapeHtml(npc.name)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`
+        : `<span class="rpg-portrait-placeholder"><svg width="18" height="18" viewBox="0 0 40 40" fill="#666" opacity="0.3"><ellipse cx="20" cy="14" rx="9" ry="10"/><ellipse cx="20" cy="42" rx="16" ry="14"/></svg></span>`}
+    </div>
+    <div style="flex:1;min-width:0;">
+      <span class="rpg-npc-name">${highlightMatch(npc.name, q)}${npc.level ? ` (Lv.${npc.level})` : ''}${npc.class ? ` — ${highlightMatch(npc.class, q)}` : ''}</span>
+      ${npc.faction ? `<div style="font-size:9px;color:var(--cat-faction);">${highlightMatch(npc.faction, q)}</div>` : ''}
+      <div style="display:flex;gap:4px;flex-wrap:wrap;">
+        ${npc.npcRole ? `<span style="font-size:9px;color:#a0a0ff;">${highlightMatch(npc.npcRole, q)}</span>` : ''}
+        <span class="rpg-disposition ${npc.disposition || 'unknown'}">${highlightMatch((npc.disposition || 'unknown').toUpperCase(), q)}</span>
+      </div>
+    </div>
+    <button class="rpg-npc-dismiss rpg-edit-remove-btn" data-char-id="${escapeHtml(id)}" title="Remove from tracking">&#10005;</button>
+  </div>`;
 }
 
 function renderNPCs(rpg) {
@@ -796,22 +884,25 @@ function renderNPCs(rpg) {
   }
 
   const q = npcSearchFilter;
-  rpgNpcList.innerHTML = npcEntries.map(([id, npc]) => `
-    <div class="rpg-npc-card" data-char-id="${escapeHtml(id)}" style="cursor:pointer;">
-      <div class="rpg-portrait" style="width:28px;height:28px;flex-shrink:0;">
-        ${npc.portraitPath
-          ? `<img src="data:image/png;base64,${npc._thumbnailData || ''}" alt="${escapeHtml(npc.name)}" style="width:100%;height:100%;object-fit:cover;border-radius:4px;">`
-          : `<span class="rpg-portrait-placeholder"><svg width="20" height="20" viewBox="0 0 40 40" fill="#666" opacity="0.3"><ellipse cx="20" cy="14" rx="9" ry="10"/><ellipse cx="20" cy="42" rx="16" ry="14"/></svg></span>`}
-      </div>
-      <div style="flex:1;min-width:0;">
-        <span class="rpg-npc-name">${highlightMatch(npc.name, q)}${npc.level ? ` (Lv.${npc.level})` : ''}${npc.class ? ` — ${highlightMatch(npc.class, q)}` : ''}</span>
-        ${npc.npcRole ? `<span style="font-size:9px;color:#a0a0ff;">${highlightMatch(npc.npcRole, q)}</span>` : ''}
-        ${npc.faction ? `<span style="font-size:9px;color:var(--cat-faction);">${highlightMatch(npc.faction, q)}</span>` : ''}
-        <span class="rpg-disposition ${npc.disposition || 'unknown'}">${highlightMatch((npc.disposition || 'unknown').toUpperCase(), q)}</span>
-      </div>
-      <button class="rpg-npc-dismiss" data-char-id="${escapeHtml(id)}" title="Remove from tracking" style="font-size:10px;color:#ff6b6b;background:none;border:none;cursor:pointer;padding:2px 4px;flex-shrink:0;">✕</button>
-    </div>
-  `).join('');
+  const DISP_RING_COLORS = { friendly: '#81c784', neutral: '#ffd54f', hostile: '#ff6b6b', unknown: '#90a4ae' };
+
+  if (npcGroupByDisposition) {
+    const groups = { friendly: [], neutral: [], hostile: [], unknown: [] };
+    for (const [id, npc] of npcEntries) {
+      const disp = npc.disposition || 'unknown';
+      (groups[disp] || groups.unknown).push([id, npc]);
+    }
+    let html = '';
+    for (const [disp, entries] of Object.entries(groups)) {
+      if (entries.length === 0) continue;
+      const color = DISP_RING_COLORS[disp] || DISP_RING_COLORS.unknown;
+      html += `<div class="rpg-npc-group-header" style="border-left-color:${color};color:${color};">${disp.toUpperCase()} (${entries.length})</div>`;
+      html += entries.map(([id, npc]) => buildNpcCardHTML(id, npc, q)).join('');
+    }
+    rpgNpcList.innerHTML = html;
+  } else {
+    rpgNpcList.innerHTML = npcEntries.map(([id, npc]) => buildNpcCardHTML(id, npc, q)).join('');
+  }
 
   // Click handlers for stat sheet overlay
   rpgNpcList.querySelectorAll('.rpg-npc-card').forEach(card => {
@@ -822,19 +913,46 @@ function renderNPCs(rpg) {
     });
   });
 
-  // Dismiss button handlers
+  // Dismiss button handlers — undo toast pattern
   rpgNpcList.querySelectorAll('.rpg-npc-dismiss').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
+    btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const charId = btn.dataset.charId;
       const charName = rpg.characters?.[charId]?.name || 'this character';
-      if (!confirm(`Remove "${charName}" from LitRPG tracking?`)) return;
-      const result = await window.sceneVisualizer.litrpgDeleteCharacter(state.currentStoryId, charId);
-      if (result.success) {
-        state.litrpgState = result.state;
-        refreshRpgUI();
-        showToast(`${charName} removed`, 2000, 'success');
+      const card = btn.closest('.rpg-npc-card');
+      if (card) { card.classList.add('rpg-slide-out-right'); }
+      // Deep snapshot for undo (character objects have nested arrays/objects)
+      const snapshot = rpg.characters?.[charId]
+        ? JSON.parse(JSON.stringify(rpg.characters[charId])) : null;
+      // Remove from state immediately so refreshRpgUI() won't re-render it
+      if (rpg.characters?.[charId]) {
+        delete rpg.characters[charId];
+        state.litrpgState = rpg;
+        saveLitrpgState();
       }
+      // Slide out card
+      setTimeout(() => { if (card) card.remove(); }, 200);
+      showToast(`Removed ${charName}`, 5000, '', {
+        onUndo: () => {
+          // Restore snapshot into state
+          if (snapshot) {
+            if (!rpg.characters) rpg.characters = {};
+            rpg.characters[charId] = snapshot;
+            state.litrpgState = rpg;
+            saveLitrpgState();
+            refreshRpgUI();
+          }
+          showToast(`${charName} restored`, 2000, 'success');
+        },
+        onExpire: async () => {
+          // Persist delete to backend when undo window expires
+          const result = await window.sceneVisualizer.litrpgDeleteCharacter(state.currentStoryId, charId);
+          if (result.success) {
+            state.litrpgState = result.state;
+            refreshRpgUI();
+          }
+        },
+      });
     });
   });
 }
@@ -928,13 +1046,16 @@ function renderInventory(rpg) {
   const allItems = [...globalInv.map(i => ({ ...i, owner: 'Shared' })), ...charItems];
 
   if (allItems.length === 0) {
-    rpgInventoryList.innerHTML = '<div style="font-size:11px;color:#666;padding:4px;">No inventory tracked.</div>';
+    rpgInventoryList.innerHTML = `<div class="rpg-empty-state">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>
+      <div>No inventory tracked.</div>
+    </div>`;
     return;
   }
 
-  rpgInventoryList.innerHTML = allItems.map(i =>
-    `<div class="rpg-inv-row"><span class="rpg-inv-name">${escapeHtml(i.name)} x${i.quantity || 1}</span>${i.rarity ? `<span class="rpg-rarity rpg-rarity-${i.rarity}">${i.rarity}</span>` : ''}<span class="rpg-inv-type">${escapeHtml(i.type || 'other')}</span><span class="rpg-inv-owner">${escapeHtml(i.owner)}</span></div>`
-  ).join('');
+  rpgInventoryList.innerHTML = `<div class="rpg-inv-grid">${allItems.map(i =>
+    `<div class="rpg-inv-slot${i.rarity ? ` rarity-${i.rarity}` : ''}"><span style="flex:1;color:#e0e0e0;">${escapeHtml(i.name)}</span><span class="rpg-inv-qty">x${i.quantity || 1}</span><span style="font-size:9px;color:#666;">${escapeHtml(i.owner)}</span></div>`
+  ).join('')}</div>`;
 }
 
 function renderCurrency(rpg) {
@@ -953,12 +1074,17 @@ function renderCurrency(rpg) {
   }
 
   if (entries.length === 0) {
-    rpgCurrencyList.innerHTML = '<div style="font-size:11px;color:#666;padding:4px;">No currency tracked.</div>';
+    rpgCurrencyList.innerHTML = `<div class="rpg-empty-state">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M15 9.5c-.6-.8-1.5-1.5-3-1.5-2 0-3 1.3-3 2.5s1 2 3 2.5c2 .5 3 1.3 3 2.5s-1 2.5-3 2.5c-1.5 0-2.4-.7-3-1.5"/></svg>
+      <div>No currency tracked.</div>
+    </div>`;
     return;
   }
 
   rpgCurrencyList.innerHTML = entries.map(e =>
-    `<div class="rpg-currency-row"><span class="rpg-inv-owner">${escapeHtml(e.owner)}</span>${Object.entries(e.currency).map(([unit, amount]) => `<span class="rpg-currency-tag">${amount} ${escapeHtml(unit)}</span>`).join(' ')}</div>`
+    `<div style="margin-bottom:6px;"><div style="font-size:9px;color:#666;margin-bottom:3px;">${escapeHtml(e.owner)}</div><div style="display:flex;flex-wrap:wrap;gap:6px;">${Object.entries(e.currency).map(([unit, amount]) =>
+      `<div class="rpg-currency-card"><span class="rpg-currency-amount">${amount}</span><span class="rpg-currency-unit">${escapeHtml(unit)}</span></div>`
+    ).join('')}</div></div>`
   ).join('');
 }
 
@@ -968,13 +1094,16 @@ function renderStatusEffects(rpg) {
   const allEffects = allChars.flatMap(c => (c.statusEffects || []).map(s => ({ ...s, owner: c.name })));
 
   if (allEffects.length === 0) {
-    rpgStatusEffectsList.innerHTML = '<div style="font-size:11px;color:#666;padding:4px;">No active effects.</div>';
+    rpgStatusEffectsList.innerHTML = `<div class="rpg-empty-state">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      <div>No active effects.</div>
+    </div>`;
     return;
   }
 
-  rpgStatusEffectsList.innerHTML = allEffects.map(s =>
-    `<div class="rpg-status-row"><span class="rpg-status-tag rpg-status-${s.type || 'buff'}">${escapeHtml(s.name)}</span><span class="rpg-inv-owner">${escapeHtml(s.owner)}</span>${s.duration ? `<span style="font-size:9px;color:#888;">${escapeHtml(s.duration)}</span>` : ''}</div>`
-  ).join('');
+  rpgStatusEffectsList.innerHTML = `<div class="rpg-status-tag-row">${allEffects.map(s =>
+    `<span class="rpg-status-tag rpg-status-${s.type || 'buff'}" title="${escapeHtml(s.owner)}${s.duration ? ` — ${escapeHtml(s.duration)}` : ''}">${s.type === 'buff' ? '&#9650;' : s.type === 'debuff' ? '&#9660;' : '&#9679;'} ${escapeHtml(s.name)}</span>`
+  ).join('')}</div>`;
 }
 
 // =========================================================================
@@ -984,40 +1113,60 @@ function renderStatusEffects(rpg) {
 function renderFactions(rpg) {
   if (!rpgFactionList) return;
   const factions = Object.values(rpg.factions || {});
-  if (rpgFactionCount) rpgFactionCount.textContent = `(${factions.length})`;
+  const orphanFactionCount = factions.filter(f => (f.members || []).length === 0).length;
+  if (rpgFactionCount) rpgFactionCount.textContent = `(${factions.length}${orphanFactionCount > 0 ? ' \u00b7 ' + orphanFactionCount + ' orphaned' : ''})`;
 
   if (factions.length === 0) {
-    rpgFactionList.innerHTML = '<div style="font-size:11px;color:#666;padding:4px;">No factions tracked yet.</div>';
+    rpgFactionList.innerHTML = `<div class="rpg-empty-state">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+      <div>No factions tracked yet.</div>
+    </div>`;
     return;
   }
 
   rpgFactionList.innerHTML = factions.map(fac => {
     const dispClass = `rpg-disposition-${(fac.disposition || 'unknown').toLowerCase()}`;
-    const members = (fac.members || []).map(m => escapeHtml(m)).join(', ');
-    return `<div class="rpg-entity-card">
+    const memberLinks = (fac.members || []).map(m =>
+      `<span class="rpg-entity-member-link" data-member-name="${escapeHtml(m)}">${escapeHtml(m)}</span>`
+    ).join(', ');
+    return `<div class="rpg-entity-card rpg-clickable">
       <div style="display:flex;align-items:center;gap:6px;">
         <span class="rpg-entity-name">${escapeHtml(fac.name)}</span>
         <span class="rpg-disposition ${dispClass}">${escapeHtml(fac.disposition || 'unknown')}</span>
         <span style="font-size:9px;color:#666;">${(fac.members || []).length} members</span>
+        ${(fac.members || []).length === 0 ? '<span class="rpg-orphan-tag">orphaned</span>' : ''}
       </div>
       ${fac.description ? `<div class="rpg-entity-desc">${escapeHtml(fac.description)}</div>` : ''}
       ${fac.territory ? `<div style="font-size:10px;color:#888;">Territory: ${escapeHtml(fac.territory)}</div>` : ''}
-      ${members ? `<div class="rpg-entity-members">Members: ${members}</div>` : ''}
+      ${memberLinks ? `<div class="rpg-entity-members">Members: ${memberLinks}</div>` : ''}
     </div>`;
   }).join('');
+
+  // Wire clickable member names
+  rpgFactionList.querySelectorAll('.rpg-entity-member-link').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const name = link.dataset.memberName;
+      const charEntry = Object.entries(rpg.characters || {}).find(([, c]) => c.name === name);
+      if (charEntry) openStatOverlay(charEntry[0], rpg);
+    });
+  });
 }
 
 function renderClasses(rpg) {
   if (!rpgClassList) return;
   const classes = Object.values(rpg.classes || {});
-  if (rpgClassCount) rpgClassCount.textContent = `(${classes.length})`;
+  const orphanClassCount = classes.filter(c => (c.practitioners || []).length === 0).length;
+  if (rpgClassCount) rpgClassCount.textContent = `(${classes.length}${orphanClassCount > 0 ? ' \u00b7 ' + orphanClassCount + ' orphaned' : ''})`;
 
   if (classes.length === 0) {
-    rpgClassList.innerHTML = '<div style="font-size:11px;color:#666;padding:4px;">No classes tracked yet.</div>';
+    rpgClassList.innerHTML = `<div class="rpg-empty-state">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      <div>No classes tracked yet.</div>
+    </div>`;
     return;
   }
 
-  // Sort: classes first, then subclasses
   const sorted = [...classes].sort((a, b) => {
     if (a.type === 'class' && b.type === 'subclass') return -1;
     if (a.type === 'subclass' && b.type === 'class') return 1;
@@ -1025,7 +1174,9 @@ function renderClasses(rpg) {
   });
 
   rpgClassList.innerHTML = sorted.map(cls => {
-    const practitioners = (cls.practitioners || []).map(p => escapeHtml(p)).join(', ');
+    const practitionerLinks = (cls.practitioners || []).map(p =>
+      `<span class="rpg-entity-member-link" data-member-name="${escapeHtml(p)}">${escapeHtml(p)}</span>`
+    ).join(', ');
     const typeLabel = cls.type === 'subclass' ? `<span style="font-size:9px;color:#ce93d8;">subclass</span>` : '';
     const parent = cls.parentClass ? `<span style="font-size:9px;color:#888;"> of ${escapeHtml(cls.parentClass)}</span>` : '';
     return `<div class="rpg-entity-card" style="${cls.type === 'subclass' ? 'margin-left:12px;' : ''}">
@@ -1033,34 +1184,103 @@ function renderClasses(rpg) {
         <span class="rpg-entity-name">${escapeHtml(cls.name)}</span>
         ${typeLabel}${parent}
         <span style="font-size:9px;color:#666;">${(cls.practitioners || []).length} practitioners</span>
+        ${(cls.practitioners || []).length === 0 ? '<span class="rpg-orphan-tag">orphaned</span>' : ''}
       </div>
       ${cls.description ? `<div class="rpg-entity-desc">${escapeHtml(cls.description)}</div>` : ''}
       ${cls.requirements ? `<div style="font-size:10px;color:#888;">Requires: ${escapeHtml(cls.requirements)}</div>` : ''}
-      ${practitioners ? `<div class="rpg-entity-members">${practitioners}</div>` : ''}
+      ${practitionerLinks ? `<div class="rpg-entity-members">${practitionerLinks}</div>` : ''}
     </div>`;
   }).join('');
+
+  // Wire clickable practitioner names
+  rpgClassList.querySelectorAll('.rpg-entity-member-link').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const name = link.dataset.memberName;
+      const charEntry = Object.entries(rpg.characters || {}).find(([, c]) => c.name === name);
+      if (charEntry) openStatOverlay(charEntry[0], rpg);
+    });
+  });
 }
 
 function renderRaces(rpg) {
   if (!rpgRaceList) return;
   const races = Object.values(rpg.races || {});
-  if (rpgRaceCount) rpgRaceCount.textContent = `(${races.length})`;
+  const orphanRaceCount = races.filter(r => (r.knownMembers || []).length === 0).length;
+  if (rpgRaceCount) rpgRaceCount.textContent = `(${races.length}${orphanRaceCount > 0 ? ' \u00b7 ' + orphanRaceCount + ' orphaned' : ''})`;
 
   if (races.length === 0) {
-    rpgRaceList.innerHTML = '<div style="font-size:11px;color:#666;padding:4px;">No races tracked yet.</div>';
+    rpgRaceList.innerHTML = `<div class="rpg-empty-state">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+      <div>No races tracked yet.</div>
+    </div>`;
     return;
   }
 
   rpgRaceList.innerHTML = races.map(race => {
-    const members = (race.knownMembers || []).map(m => escapeHtml(m)).join(', ');
+    const memberLinks = (race.knownMembers || []).map(m =>
+      `<span class="rpg-entity-member-link" data-member-name="${escapeHtml(m)}">${escapeHtml(m)}</span>`
+    ).join(', ');
+    const traitPills = race.traits
+      ? race.traits.split(',').map(t => t.trim()).filter(Boolean).map(t => `<span class="rpg-trait-pill">${escapeHtml(t)}</span>`).join('')
+      : '';
     return `<div class="rpg-entity-card">
       <div style="display:flex;align-items:center;gap:6px;">
         <span class="rpg-entity-name">${escapeHtml(race.name)}</span>
         <span style="font-size:9px;color:#666;">${(race.knownMembers || []).length} known</span>
+        ${(race.knownMembers || []).length === 0 ? '<span class="rpg-orphan-tag">orphaned</span>' : ''}
       </div>
       ${race.description ? `<div class="rpg-entity-desc">${escapeHtml(race.description)}</div>` : ''}
-      ${race.traits ? `<div style="font-size:10px;color:#d4a574;">Traits: ${escapeHtml(race.traits)}</div>` : ''}
-      ${members ? `<div class="rpg-entity-members">${members}</div>` : ''}
+      ${traitPills ? `<div style="margin-top:3px;">${traitPills}</div>` : ''}
+      ${memberLinks ? `<div class="rpg-entity-members">${memberLinks}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  rpgRaceList.querySelectorAll('.rpg-entity-member-link').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const name = link.dataset.memberName;
+      const charEntry = Object.entries(rpg.characters || {}).find(([, c]) => c.name === name);
+      if (charEntry) openStatOverlay(charEntry[0], rpg);
+    });
+  });
+}
+
+// =========================================================================
+// SCAN HISTORY (Phase 6.5)
+// =========================================================================
+
+function renderScanHistory(rpg) {
+  if (!rpgScanHistorySection || !rpgScanHistoryList) return;
+  const history = rpg.scanHistory || [];
+
+  if (history.length === 0) {
+    rpgScanHistorySection.style.display = 'none';
+    return;
+  }
+
+  rpgScanHistorySection.style.display = '';
+  if (rpgScanHistoryCount) rpgScanHistoryCount.textContent = `(${history.length})`;
+
+  rpgScanHistoryList.innerHTML = history.map(entry => {
+    const date = new Date(entry.timestamp);
+    const timeStr = date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const durationStr = entry.duration != null ? `${Math.round(entry.duration / 1000)}s` : '?';
+    const passKeys = Object.keys(entry.passes || {});
+    const passSummary = passKeys.map(k => {
+      const p = entry.passes[k];
+      return `${k}: ${p.succeeded}/${p.attempted}`;
+    }).join(', ');
+    const errorBadge = entry.errorCount > 0
+      ? `<span class="rpg-scan-history-errors" style="color:#e94560;font-size:9px;margin-left:4px;">${entry.errorCount} error${entry.errorCount !== 1 ? 's' : ''}</span>`
+      : '';
+    return `<div class="rpg-scan-history-item" style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:11px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="color:#ccc;">${timeStr}</span>
+        <span style="color:#888;">${durationStr}${errorBadge}</span>
+      </div>
+      <div style="color:#999;margin-top:2px;">${escapeHtml(entry.summary || '')}</div>
+      ${passSummary ? `<div style="color:#666;margin-top:1px;font-size:10px;">${escapeHtml(passSummary)}</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -1136,14 +1356,17 @@ async function loadAlbumStrip(charId) {
       return;
     }
 
-    strip.innerHTML = items.map(item => `
-      <div class="rpg-album-thumb" data-image-id="${escapeHtml(item.id)}" title="Click to view" style="position:relative;width:64px;height:64px;border-radius:4px;overflow:hidden;cursor:pointer;border:1px solid #333;flex-shrink:0;">
+    albumItems = items;
+    albumCharId = charId;
+
+    strip.innerHTML = items.map((item, idx) => `
+      <div class="rpg-album-thumb-v2${idx === 0 ? ' active-portrait' : ''}" data-image-id="${escapeHtml(item.id)}" title="Click to view">
         ${item.thumbnailData
           ? `<img src="data:image/png;base64,${item.thumbnailData}" style="width:100%;height:100%;object-fit:cover;">`
           : '<div style="width:100%;height:100%;background:#222;"></div>'}
         <div class="rpg-album-actions" style="position:absolute;bottom:0;left:0;right:0;display:flex;gap:1px;opacity:0;transition:opacity 0.15s;">
-          <button class="rpg-album-use" data-image-id="${escapeHtml(item.id)}" title="Set as active portrait" style="flex:1;font-size:8px;padding:2px;background:rgba(0,120,255,0.8);color:#fff;border:none;cursor:pointer;">Use</button>
-          <button class="rpg-album-del" data-image-id="${escapeHtml(item.id)}" title="Delete" style="flex:0;font-size:8px;padding:2px 4px;background:rgba(200,0,0,0.8);color:#fff;border:none;cursor:pointer;">X</button>
+          <button class="rpg-album-use" data-image-id="${escapeHtml(item.id)}" title="Set as active portrait" style="flex:1;font-size:8px;padding:3px;background:rgba(0,120,255,0.85);color:#fff;border:none;cursor:pointer;">Use</button>
+          <button class="rpg-album-del" data-image-id="${escapeHtml(item.id)}" title="Delete" style="flex:0;font-size:8px;padding:3px 5px;background:rgba(200,0,0,0.85);color:#fff;border:none;cursor:pointer;">X</button>
         </div>
       </div>
     `).join('');
@@ -1185,18 +1408,29 @@ async function loadAlbumStrip(charId) {
   }
 }
 
+// Album lightbox state
+let albumItems = [];
+let albumCharId = null;
+let albumIndex = 0;
+
 async function viewAlbumImage(charId, imageId) {
   if (!state.currentStoryId) return;
-  try {
-    const imageData = await window.sceneVisualizer.portraitAlbumGet(state.currentStoryId, charId, imageId);
-    if (!imageData) return;
+  albumCharId = charId;
+  const idx = albumItems.findIndex(item => item.id === imageId);
+  albumIndex = idx >= 0 ? idx : 0;
+  await showAlbumLightbox();
+}
 
-    // Simple full-screen overlay for viewing
-    const viewer = document.createElement('div');
-    viewer.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;cursor:pointer;';
-    viewer.innerHTML = `<img src="data:image/png;base64,${imageData}" style="max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.5);">`;
-    viewer.addEventListener('click', () => viewer.remove());
-    document.body.appendChild(viewer);
+async function showAlbumLightbox() {
+  if (!rpgAlbumLightbox || !rpgAlbumLightboxImg || albumItems.length === 0) return;
+  const item = albumItems[albumIndex];
+  if (!item) return;
+  try {
+    const imageData = await window.sceneVisualizer.portraitAlbumGet(state.currentStoryId, albumCharId, item.id);
+    if (!imageData) return;
+    rpgAlbumLightboxImg.src = `data:image/png;base64,${imageData}`;
+    if (rpgAlbumCounter) rpgAlbumCounter.textContent = `${albumIndex + 1} of ${albumItems.length}`;
+    rpgAlbumLightbox.style.display = 'flex';
   } catch (err) {
     showToast('Failed to load image');
   }
@@ -1242,25 +1476,29 @@ async function deleteAlbumImage(charId, imageId) {
 // =========================================================================
 
 let scanElapsedTimer = null;
+let lastEtaText = '';
 
 async function runRpgScan() {
   if (!state.currentStoryId || state.litrpgScanning) return;
   state.litrpgScanning = true;
   if (rpgScanStatus) rpgScanStatus.style.display = '';
-  if (rpgScanPhase) {
-    rpgScanPhase.textContent = 'Starting RPG scan...';
-    rpgScanPhase.classList.add('rpg-scan-pulsing');
+  if (rpgScanPhase) rpgScanPhase.textContent = 'Starting RPG scan...';
+  if (rpgScanBtn) { rpgScanBtn.disabled = true; rpgScanBtn.classList.add('scanning'); }
+
+  // Reset step indicators
+  if (rpgScanSteps) {
+    rpgScanSteps.querySelectorAll('.rpg-scan-step').forEach(s => {
+      s.classList.remove('active', 'completed');
+    });
   }
-  if (rpgScanBtn) rpgScanBtn.disabled = true;
 
   // Elapsed timer
+  lastEtaText = '';
   const scanStartTime = Date.now();
   if (scanElapsedTimer) clearInterval(scanElapsedTimer);
   scanElapsedTimer = setInterval(() => {
-    if (!rpgScanPhase) return;
     const elapsed = Math.round((Date.now() - scanStartTime) / 1000);
-    const base = rpgScanPhase.textContent.replace(/\s*\(\d+s\)$/, '');
-    rpgScanPhase.textContent = `${base} (${elapsed}s)`;
+    if (rpgScanElapsed) rpgScanElapsed.textContent = `${elapsed}s elapsed${lastEtaText}`;
   }, 1000);
 
   try {
@@ -1286,7 +1524,13 @@ async function runRpgScan() {
       `);
     } catch (_) { /* fallback empty */ }
 
-    const result = await window.sceneVisualizer.litrpgScan(storyText, state.currentStoryId, loreEntries);
+    const forceReEnrichEl = document.getElementById('rpgForceReEnrich');
+    const scanOptions = {};
+    if (forceReEnrichEl && forceReEnrichEl.checked) {
+      scanOptions.forceReEnrich = true;
+      forceReEnrichEl.checked = false;
+    }
+    const result = await window.sceneVisualizer.litrpgScan(storyText, state.currentStoryId, loreEntries, scanOptions);
     if (result.success) {
       state.litrpgState = result.state;
       refreshRpgUI();
@@ -1318,7 +1562,13 @@ async function runRpgScan() {
         showToast(`${result.r4Skipped} more RPG elements found but capped`, 3000);
       }
 
-      showToast('RPG scan complete', 2000, 'success');
+      // Show report summary (Phase 6.5)
+      if (result.report) {
+        showToast(result.report.summary, 4000, 'success');
+        renderScanHistory(state.litrpgState);
+      } else {
+        showToast('RPG scan complete', 2000, 'success');
+      }
     } else {
       showToast(`RPG scan failed: ${result.error || 'Unknown error'}`, 3000, 'error');
     }
@@ -1327,12 +1577,24 @@ async function runRpgScan() {
     console.error('[LitRPG] Scan error:', err);
   } finally {
     state.litrpgScanning = false;
+    lastEtaText = '';
     if (scanElapsedTimer) { clearInterval(scanElapsedTimer); scanElapsedTimer = null; }
-    if (rpgScanPhase) { rpgScanPhase.classList.remove('rpg-scan-pulsing'); rpgScanPhase.textContent = 'Scan complete'; }
-    if (rpgScanBtn) rpgScanBtn.disabled = false;
+    if (rpgScanPhase) rpgScanPhase.textContent = 'Scan complete';
+    if (rpgScanElapsed) rpgScanElapsed.textContent = '';
+    if (rpgScanBtn) { rpgScanBtn.disabled = false; rpgScanBtn.classList.remove('scanning'); }
+    // Mark all steps as completed
+    if (rpgScanSteps) {
+      rpgScanSteps.querySelectorAll('.rpg-scan-step').forEach(s => {
+        s.classList.remove('active');
+        s.classList.add('completed');
+      });
+    }
     setTimeout(() => {
       if (rpgScanStatus) rpgScanStatus.style.display = 'none';
-    }, 1500);
+      if (rpgScanSteps) {
+        rpgScanSteps.querySelectorAll('.rpg-scan-step').forEach(s => s.classList.remove('completed'));
+      }
+    }, 2000);
   }
 }
 
@@ -1461,10 +1723,15 @@ async function reverseSyncFromLorebook() {
       if (result.updatedCount > 0) {
         state.litrpgState = result.state;
         refreshRpgUI();
+        const changedNames = (result.results || []).filter(r => r.changed && r.success).map(r => r.entryName);
+        showToast(`Updated ${changedNames.length}: ${changedNames.join(', ')}`, 4000, 'success');
+      } else {
+        showToast('No RPG changes found in lorebook');
       }
-      showToast(result.updatedCount > 0
-        ? `Updated ${result.updatedCount} character${result.updatedCount > 1 ? 's' : ''} from lorebook`
-        : 'No RPG changes found in lorebook');
+      if (result.failedCount > 0) {
+        const failedNames = (result.results || []).filter(r => !r.success).map(r => r.entryName);
+        showToast(`Failed to sync: ${failedNames.join(', ')}`, 4000, 'error');
+      }
     } else {
       showToast('Reverse sync failed');
     }
@@ -1520,14 +1787,25 @@ async function acceptAll() {
 
 async function rejectAll() {
   if (!state.currentStoryId) return;
-  if (!confirm('Reject all pending updates?')) return;
+  // Save snapshot for undo
+  const snapshot = JSON.parse(JSON.stringify(state.litrpgState?.pendingUpdates || []));
   if (rpgRejectAllBtn) rpgRejectAllBtn.disabled = true;
   try {
     const result = await window.sceneVisualizer.litrpgRejectAllUpdates(state.currentStoryId);
     if (result.success) {
       state.litrpgState = result.state;
       refreshRpgUI();
-      showToast('All updates rejected');
+      showToast('All updates rejected', 5000, '', {
+        onUndo: () => {
+          // Restore pending updates
+          if (state.litrpgState) {
+            state.litrpgState.pendingUpdates = snapshot;
+            saveLitrpgState();
+            refreshRpgUI();
+          }
+          showToast('Updates restored', 2000, 'success');
+        },
+      });
     }
   } finally {
     if (rpgRejectAllBtn) rpgRejectAllBtn.disabled = false;
@@ -1540,18 +1818,47 @@ async function rejectAll() {
 
 function setupIPCListeners() {
   window.sceneVisualizer.onLitrpgScanProgress((progress) => {
+    const phaseLabels = {
+      characters: 'Extracting character RPG data',
+      quests: 'Scanning for quests',
+      party: 'Classifying party & NPCs',
+      'lore-elements': 'Generating RPG lore entries',
+      enrichment: 'Enriching entity descriptions',
+      complete: 'Scan complete',
+    };
     if (rpgScanPhase) {
-      const phaseLabels = {
-        characters: 'Extracting character RPG data',
-        quests: 'Scanning for quests',
-        party: 'Classifying party & NPCs',
-        'lore-elements': 'Generating RPG lore entries',
-        complete: 'Scan complete',
-      };
-      rpgScanPhase.textContent = phaseLabels[progress.phase] || progress.phase;
+      let label = phaseLabels[progress.phase] || progress.phase;
       if (progress.current != null && progress.total) {
-        rpgScanPhase.textContent += ` (${progress.current}/${progress.total})`;
+        label += ` (${progress.current}/${progress.total})`;
       }
+      if (progress.characterName) {
+        label += ` — ${progress.characterName}`;
+      }
+      if (progress.errorCount > 0) {
+        label += ` [${progress.errorCount} error${progress.errorCount > 1 ? 's' : ''}]`;
+      }
+      rpgScanPhase.textContent = label;
+
+      // Compute ETA from passStartedAt
+      if (progress.passStartedAt && progress.current > 0 && progress.total > progress.current) {
+        const elapsed = Date.now() - progress.passStartedAt;
+        const remaining = Math.round((elapsed / progress.current) * (progress.total - progress.current) / 1000);
+        lastEtaText = remaining > 2 ? ` · ~${remaining}s remaining` : '';
+      } else {
+        lastEtaText = '';
+      }
+    }
+    // Update step indicator
+    if (rpgScanSteps) {
+      const phaseOrder = ['characters', 'quests', 'party', 'lore-elements', 'enrichment'];
+      const currentIdx = phaseOrder.indexOf(progress.phase);
+      rpgScanSteps.querySelectorAll('.rpg-scan-step').forEach(step => {
+        const stepPhase = step.dataset.phase;
+        const stepIdx = phaseOrder.indexOf(stepPhase);
+        step.classList.remove('active', 'completed');
+        if (stepIdx < currentIdx) step.classList.add('completed');
+        else if (stepIdx === currentIdx) step.classList.add('active');
+      });
     }
   });
 
@@ -1589,6 +1896,13 @@ function setupIPCListeners() {
     state.litrpgState.systemType = systemType;
     saveLitrpgState();
     if (rpgTab) rpgTab.style.display = '';
+    if (rpgDetectedType) {
+      const typeLabels = {
+        generic: 'Generic RPG', dnd: 'D&D Style', cultivation: 'Cultivation',
+        gamelit: 'GameLit', mmorpg: 'MMORPG', survival: 'Survival',
+      };
+      rpgDetectedType.textContent = typeLabels[systemType] || systemType;
+    }
     refreshRpgUI();
     showToast(`LitRPG story detected (${systemType})!`);
   });
@@ -1634,6 +1948,49 @@ export function init() {
       renderNPCs(getRpgState());
     });
   }
+
+  // NPC group by disposition toggle (Gap 6)
+  if (rpgNpcGroupBtn) {
+    rpgNpcGroupBtn.addEventListener('click', () => {
+      npcGroupByDisposition = !npcGroupByDisposition;
+      rpgNpcGroupBtn.classList.toggle('active', npcGroupByDisposition);
+      renderNPCs(getRpgState());
+    });
+  }
+
+  // Album lightbox controls
+  if (rpgAlbumPrev) rpgAlbumPrev.addEventListener('click', () => {
+    if (albumItems.length === 0) return;
+    albumIndex = (albumIndex - 1 + albumItems.length) % albumItems.length;
+    showAlbumLightbox();
+  });
+  if (rpgAlbumNext) rpgAlbumNext.addEventListener('click', () => {
+    if (albumItems.length === 0) return;
+    albumIndex = (albumIndex + 1) % albumItems.length;
+    showAlbumLightbox();
+  });
+  if (rpgAlbumClose) rpgAlbumClose.addEventListener('click', () => {
+    if (rpgAlbumLightbox) rpgAlbumLightbox.style.display = 'none';
+  });
+  if (rpgAlbumSetActive) rpgAlbumSetActive.addEventListener('click', () => {
+    if (albumItems[albumIndex]) {
+      setAlbumAsActive(albumCharId, albumItems[albumIndex].id);
+      if (rpgAlbumLightbox) rpgAlbumLightbox.style.display = 'none';
+    }
+  });
+  if (rpgAlbumDelete) rpgAlbumDelete.addEventListener('click', () => {
+    if (albumItems[albumIndex]) {
+      deleteAlbumImage(albumCharId, albumItems[albumIndex].id);
+      if (rpgAlbumLightbox) rpgAlbumLightbox.style.display = 'none';
+    }
+  });
+  // Keyboard navigation for album lightbox
+  document.addEventListener('keydown', (e) => {
+    if (!rpgAlbumLightbox || rpgAlbumLightbox.style.display === 'none') return;
+    if (e.key === 'ArrowLeft') { rpgAlbumPrev?.click(); }
+    else if (e.key === 'ArrowRight') { rpgAlbumNext?.click(); }
+    else if (e.key === 'Escape') { rpgAlbumClose?.click(); }
+  });
 
   // Settings persistence (Phase 5A)
   if (rpgAutoScan) {

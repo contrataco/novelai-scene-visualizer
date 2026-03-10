@@ -193,8 +193,8 @@ contextBridge.exposeInMainWorld('sceneVisualizer', {
   // LitRPG Tracker
   litrpgDetect: (storyText, storyId) =>
     ipcRenderer.invoke('litrpg:detect', { storyText, storyId }),
-  litrpgScan: (storyText, storyId, loreEntries) =>
-    ipcRenderer.invoke('litrpg:scan', { storyText, storyId, loreEntries }),
+  litrpgScan: (storyText, storyId, loreEntries, options) =>
+    ipcRenderer.invoke('litrpg:scan', { storyText, storyId, loreEntries, ...options }),
   litrpgGetState: (storyId) =>
     ipcRenderer.invoke('litrpg:get-state', storyId),
   litrpgSetState: (storyId, state) =>
