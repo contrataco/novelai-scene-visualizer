@@ -14,7 +14,7 @@ import {
   rpgUpdatesList, rpgUpdatesSection, rpgUpdatesCount,
   rpgAutoScan, rpgAutoSync, rpgDisableBtn,
   rpgAcceptAllBtn, rpgRejectAllBtn,
-  rpgNpcSearch, rpgNpcGroupBtn,
+  rpgForceReEnrich, rpgNpcSearch, rpgNpcGroupBtn,
   rpgInventoryList, rpgCurrencyList, rpgStatusEffectsList,
   rpgStatOverlay, rpgStatOverlayContent, rpgStatOverlayClose,
   rpgFactionList, rpgFactionCount,
@@ -828,6 +828,7 @@ function buildQuestCardHTML(quest) {
 
 let npcSearchFilter = '';
 let npcGroupByDisposition = false;
+const DISP_RING_COLORS = { friendly: '#81c784', neutral: '#ffd54f', hostile: '#ff6b6b', unknown: '#90a4ae' };
 
 function highlightMatch(text, query) {
   if (!query) return escapeHtml(text);
@@ -837,7 +838,6 @@ function highlightMatch(text, query) {
 }
 
 function buildNpcCardHTML(id, npc, q) {
-  const DISP_RING_COLORS = { friendly: '#81c784', neutral: '#ffd54f', hostile: '#ff6b6b', unknown: '#90a4ae' };
   const dispColor = DISP_RING_COLORS[npc.disposition] || DISP_RING_COLORS.unknown;
   return `
   <div class="rpg-npc-card rpg-clickable" data-char-id="${escapeHtml(id)}" style="cursor:pointer;">
@@ -884,7 +884,6 @@ function renderNPCs(rpg) {
   }
 
   const q = npcSearchFilter;
-  const DISP_RING_COLORS = { friendly: '#81c784', neutral: '#ffd54f', hostile: '#ff6b6b', unknown: '#90a4ae' };
 
   if (npcGroupByDisposition) {
     const groups = { friendly: [], neutral: [], hostile: [], unknown: [] };
@@ -934,11 +933,10 @@ function renderNPCs(rpg) {
       setTimeout(() => { if (card) card.remove(); }, 200);
       showToast(`Removed ${charName}`, 5000, '', {
         onUndo: () => {
-          // Restore snapshot into state
-          if (snapshot) {
-            if (!rpg.characters) rpg.characters = {};
-            rpg.characters[charId] = snapshot;
-            state.litrpgState = rpg;
+          // Restore snapshot into current state (not captured rpg — may be stale if scan ran)
+          if (snapshot && state.litrpgState) {
+            if (!state.litrpgState.characters) state.litrpgState.characters = {};
+            state.litrpgState.characters[charId] = snapshot;
             saveLitrpgState();
             refreshRpgUI();
           }
@@ -1524,11 +1522,10 @@ async function runRpgScan() {
       `);
     } catch (_) { /* fallback empty */ }
 
-    const forceReEnrichEl = document.getElementById('rpgForceReEnrich');
     const scanOptions = {};
-    if (forceReEnrichEl && forceReEnrichEl.checked) {
+    if (rpgForceReEnrich && rpgForceReEnrich.checked) {
       scanOptions.forceReEnrich = true;
-      forceReEnrichEl.checked = false;
+      rpgForceReEnrich.checked = false;
     }
     const result = await window.sceneVisualizer.litrpgScan(storyText, state.currentStoryId, loreEntries, scanOptions);
     if (result.success) {
