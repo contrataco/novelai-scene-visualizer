@@ -292,13 +292,33 @@ export const rpgAutoSync = document.getElementById('rpgAutoSync');
 export const rpgDisableBtn = document.getElementById('rpgDisableBtn');
 export const rpgAcceptAllBtn = document.getElementById('rpgAcceptAllBtn');
 export const rpgRejectAllBtn = document.getElementById('rpgRejectAllBtn');
+export const rpgForceReEnrich = document.getElementById('rpgForceReEnrich');
 export const rpgNpcSearch = document.getElementById('rpgNpcSearch');
+export const rpgNpcGroupBtn = document.getElementById('rpgNpcGroupBtn');
 export const rpgInventoryList = document.getElementById('rpgInventoryList');
 export const rpgCurrencyList = document.getElementById('rpgCurrencyList');
 export const rpgStatusEffectsList = document.getElementById('rpgStatusEffectsList');
 export const rpgStatOverlay = document.getElementById('rpgStatOverlay');
 export const rpgStatOverlayContent = document.getElementById('rpgStatOverlayContent');
 export const rpgStatOverlayClose = document.getElementById('rpgStatOverlayClose');
+
+// LitRPG scan progress + history
+export const rpgScanSteps = document.getElementById('rpgScanSteps');
+export const rpgScanElapsed = document.getElementById('rpgScanElapsed');
+export const rpgScanHistorySection = document.getElementById('rpgScanHistorySection');
+export const rpgScanHistoryCount = document.getElementById('rpgScanHistoryCount');
+export const rpgScanHistoryList = document.getElementById('rpgScanHistoryList');
+export const rpgDetectedType = document.getElementById('rpgDetectedType');
+
+// LitRPG album lightbox
+export const rpgAlbumLightbox = document.getElementById('rpgAlbumLightbox');
+export const rpgAlbumLightboxImg = document.getElementById('rpgAlbumLightboxImg');
+export const rpgAlbumPrev = document.getElementById('rpgAlbumPrev');
+export const rpgAlbumNext = document.getElementById('rpgAlbumNext');
+export const rpgAlbumCounter = document.getElementById('rpgAlbumCounter');
+export const rpgAlbumSetActive = document.getElementById('rpgAlbumSetActive');
+export const rpgAlbumDelete = document.getElementById('rpgAlbumDelete');
+export const rpgAlbumClose = document.getElementById('rpgAlbumClose');
 
 // LitRPG entity collection elements
 export const rpgFactionList = document.getElementById('rpgFactionList');
