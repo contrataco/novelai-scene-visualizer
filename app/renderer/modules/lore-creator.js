@@ -2500,7 +2500,12 @@ export function init() {
       'propagating-names': 'Propagating family names...',
       'optimizing': 'Optimizing lorebook settings...',
     };
-    loreScanPhase.textContent = phaseLabels[progress.phase] || 'Scanning...';
+    // Show per-entry detail for optimization phase
+    if (progress.phase === 'optimizing' && progress.characterName) {
+      loreScanPhase.textContent = `Optimizing: ${progress.characterName} (${progress.current}/${progress.total})`;
+    } else {
+      loreScanPhase.textContent = phaseLabels[progress.phase] || 'Scanning...';
+    }
 
     // Update progress bar
     const phaseProgress = {
@@ -2979,13 +2984,4 @@ export function init() {
     });
   }
 
-  // Add optimization phase to scan progress listener
-  window.sceneVisualizer.onLoreScanProgress((progress) => {
-    if (progress.phase === 'optimizing') {
-      loreScanPhase.textContent = progress.characterName
-        ? `Optimizing: ${progress.characterName} (${progress.current}/${progress.total})`
-        : 'Optimizing lorebook entries...';
-      loreScanProgressFill.style.width = '96%';
-    }
-  });
 }

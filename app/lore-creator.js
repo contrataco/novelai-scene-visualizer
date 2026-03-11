@@ -2542,14 +2542,11 @@ async function scanForLore(storyText, settings, existingEntries, state, generate
 
     try {
       const lorebookOptimizer = require('./lorebook-optimizer');
-      const result = lorebookOptimizer.optimizeLoreEntries(
+      const optResult = await lorebookOptimizer.optimizeLoreEntries(
         existingEntries, settings._lorebookProfile, settings._entityProfiles || {},
-        generateTextFn, settings._confirmedFields,
+        hybrid.getProviders, settings._confirmedFields,
         (p) => { if (onProgress) onProgress({ ...p, phase: 'optimizing' }); }
       );
-      // Result is sync (no await needed since bias detection is the only async part,
-      // and it's cached after first run) — but we await just in case
-      const optResult = await result;
       optimized = optResult.optimized;
       updatedState._pendingOptimizations = optResult.details;
 
@@ -2670,6 +2667,7 @@ module.exports = {
   // LLM retry
   retryLLM,
   categorizeError,
+  createHybridProviders,
 
   // Constants
   DEFAULT_SETTINGS,

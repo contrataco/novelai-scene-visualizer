@@ -260,7 +260,7 @@ function computeBudget(entry, metadata, profile, entityProfile, isForceActivated
   }
   // Dormant: deprioritized
   else if (entityProfile && entityProfile.mentionCount <= 1 && !isForceActivated) {
-    budgetPriority = Math.max(budgetPriority + 100, budgetPriority);
+    budgetPriority += 100;
     contextSize = Math.max(Math.floor(contextSize * 0.7), 256);
   }
 
@@ -294,6 +294,7 @@ function computePrefixSuffix(entry, metadata, profile, entryType) {
 
 async function computeBiases(entry, metadata, profile, generateTextFn) {
   const biases = [];
+  let detectedSpeech = null; // 'distinctive' or 'neutral', null if not checked
 
   // Speech pattern detection — only for characters with the right profile rules
   if (profile.rules.biasCharacterSpeech) {
@@ -302,11 +303,13 @@ async function computeBiases(entry, metadata, profile, generateTextFn) {
       // Check if already cached
       const speechMeta = metadata.all?.['opt-speech'];
       if (speechMeta === 'neutral') {
-        // Already known: no distinctive speech
-        return biases;
+        return { biases, detectedSpeech: 'neutral' };
+      }
+      if (speechMeta === 'distinctive') {
+        return { biases, detectedSpeech: 'distinctive' };
       }
 
-      if (!speechMeta && generateTextFn) {
+      if (generateTextFn) {
         // Detect speech patterns via LLM (one call per new character)
         try {
           const result = await retryLLM(async () => {
@@ -324,7 +327,9 @@ Respond with: {"distinctive": true/false, "patterns": ["description of each patt
           }, { maxRetries: 0, passName: 'speech-detect' });
 
           if (result && result.distinctive && Array.isArray(result.patterns) && result.patterns.length > 0) {
-            return biases; // Biases for speech are complex — just mark as distinctive for now
+            detectedSpeech = 'distinctive';
+          } else {
+            detectedSpeech = 'neutral';
           }
         } catch (e) {
           console.log(`${LOG_PREFIX} Speech detection failed for ${entry.displayName}: ${e.message}`);
@@ -333,7 +338,7 @@ Respond with: {"distinctive": true/false, "patterns": ["description of each patt
     }
   }
 
-  return biases;
+  return { biases, detectedSpeech };
 }
 
 // ============================================================================
@@ -348,11 +353,13 @@ async function optimizeEntry(entry, profile, entityProfiles, generateTextFn) {
   const activation = computeActivation(entry, metadata, profile, entityProfile);
   const budget = computeBudget(entry, metadata, profile, entityProfile, activation.forceActivation);
   const prefixSuffix = computePrefixSuffix(entry, metadata, profile, entryType);
-  const biases = await computeBiases(entry, metadata, profile, generateTextFn);
+  const biasResult = await computeBiases(entry, metadata, profile, generateTextFn);
 
-  // Mark speech pattern detection result in metadata
-  let speechMeta = metadata.all?.['opt-speech'] || null;
-  // (set during bias computation, but we handle it here for metadata updates)
+  // Build contextConfig (NovelAI nests prefix/suffix/budgetPriority here)
+  const contextConfig = {};
+  if (prefixSuffix.prefix) contextConfig.prefix = prefixSuffix.prefix;
+  if (prefixSuffix.suffix) contextConfig.suffix = prefixSuffix.suffix;
+  contextConfig.budgetPriority = budget.budgetPriority;
 
   return {
     entryId: entry.id,
@@ -363,15 +370,12 @@ async function optimizeEntry(entry, profile, entityProfiles, generateTextFn) {
       forceActivation: activation.forceActivation,
       keyRelative: activation.keyRelative,
       nonStoryActivatable: activation.nonStoryActivatable,
-      budgetPriority: budget.budgetPriority,
+      contextConfig,
       contextSize: budget.contextSize,
-      prefix: prefixSuffix.prefix,
-      suffix: prefixSuffix.suffix,
-      loreBias: biases,
+      loreBias: biasResult.biases,
     },
-    metadata: {
-      speechMeta,
-    },
+    // Speech detection result for metadata persistence
+    detectedSpeech: biasResult.detectedSpeech,
   };
 }
 
@@ -407,7 +411,7 @@ function diffOptimized(optimized, currentEntry) {
 // PASS 6 ORCHESTRATOR — runs after lore scan passes
 // ============================================================================
 
-async function optimizeLoreEntries(entries, profileId, entityProfiles, generateTextFn, confirmedFields, onProgress) {
+async function optimizeLoreEntries(entries, profileId, entityProfiles, getProvidersFn, confirmedFields, onProgress) {
   const profile = getProfile(profileId);
 
   if (!confirmedFields || confirmedFields.length === 0) {
@@ -419,47 +423,76 @@ async function optimizeLoreEntries(entries, profileId, entityProfiles, generateT
   let optimized = 0;
   let skipped = 0;
 
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
+  // Process entries in batches using hybrid providers (same pattern as other scan passes)
+  for (let i = 0; i < entries.length;) {
+    const providers = typeof getProvidersFn === 'function' ? getProvidersFn() : [getProvidersFn];
+    const batch = entries.slice(i, i + providers.length);
+    i += providers.length;
 
     if (onProgress) {
       onProgress({
         phase: 'optimizing',
-        current: i + 1,
+        current: Math.min(i, entries.length),
         total: entries.length,
-        characterName: entry.displayName,
+        characterName: batch.map(e => e.displayName).join(', '),
       });
     }
 
-    try {
-      const result = await optimizeEntry(entry, profile, entityProfiles, generateTextFn);
+    const batchResults = await Promise.all(batch.map((entry, idx) =>
+      optimizeEntry(entry, profile, entityProfiles, providers[idx] || providers[0])
+        .catch(e => {
+          console.error(`${LOG_PREFIX} Failed to optimize ${entry.displayName}: ${e.message}`);
+          return null;
+        })
+    ));
 
-      // Filter to only confirmed-writable fields
-      const filteredFields = {};
-      for (const [key, value] of Object.entries(result.fields)) {
-        if (confirmedFields.includes(key)) {
-          filteredFields[key] = value;
+    for (let j = 0; j < batch.length; j++) {
+      const entry = batch[j];
+      const result = batchResults[j];
+      if (!result) { skipped++; continue; }
+
+      try {
+        // Filter to only confirmed-writable fields
+        const filteredFields = {};
+        for (const [key, value] of Object.entries(result.fields)) {
+          if (confirmedFields.includes(key)) {
+            filteredFields[key] = value;
+          }
         }
-      }
 
-      // Diff against current entry state
-      const delta = diffOptimized({ fields: filteredFields }, entry);
+        // Diff against current entry state
+        const delta = diffOptimized({ fields: filteredFields }, entry);
 
-      if (delta) {
-        details.push({
-          entryId: entry.id,
-          displayName: entry.displayName,
-          entryType: result.entryType,
-          delta,
-          applied: false,
-        });
-        optimized++;
-      } else {
+        // Build text update with optimization markers + speech cache
+        let textUpdate = null;
+        const extras = { 'opt-v': '1', 'opt-at': new Date().toISOString().slice(0, 10) };
+        if (result.detectedSpeech) {
+          extras['opt-speech'] = result.detectedSpeech;
+        }
+        if (entry.text) {
+          textUpdate = setMetadata(entry.text, { extras });
+        }
+
+        if (delta || textUpdate) {
+          const fullDelta = delta || {};
+          if (textUpdate && textUpdate !== entry.text) {
+            fullDelta.text = textUpdate;
+          }
+          details.push({
+            entryId: entry.id,
+            displayName: entry.displayName,
+            entryType: result.entryType,
+            delta: fullDelta,
+            applied: false,
+          });
+          optimized++;
+        } else {
+          skipped++;
+        }
+      } catch (e) {
+        console.error(`${LOG_PREFIX} Failed to optimize ${entry.displayName}: ${e.message}`);
         skipped++;
       }
-    } catch (e) {
-      console.error(`${LOG_PREFIX} Failed to optimize ${entry.displayName}: ${e.message}`);
-      skipped++;
     }
   }
 
@@ -483,12 +516,17 @@ function adjustOnNewText(entries, profileId, entityProfiles) {
     const entryType = getEntryType(entry.text, entry.displayName);
     const prefixSuffix = computePrefixSuffix(entry, metadata, profile, entryType);
 
-    // Build delta
+    // Build delta (prefix nested in contextConfig)
     const newFields = {
       searchRange: activation.searchRange,
       forceActivation: activation.forceActivation,
-      prefix: prefixSuffix.prefix,
     };
+    if (prefixSuffix.prefix) {
+      const currentCtx = entry.contextConfig || {};
+      if (currentCtx.prefix !== prefixSuffix.prefix) {
+        newFields.contextConfig = { ...currentCtx, prefix: prefixSuffix.prefix };
+      }
+    }
 
     const delta = {};
     for (const [key, val] of Object.entries(newFields)) {
@@ -560,9 +598,9 @@ function buildOptimizationSummary(details) {
   for (const d of details) {
     if (!d.delta) continue;
     if (d.delta.forceActivation !== undefined) summary.forceActivated++;
-    if (d.delta.budgetPriority !== undefined || d.delta.contextSize !== undefined) summary.budgetAdjusted++;
+    if (d.delta.contextConfig?.budgetPriority !== undefined || d.delta.contextSize !== undefined) summary.budgetAdjusted++;
     if (d.delta.searchRange !== undefined) summary.searchRangeChanged++;
-    if (d.delta.prefix) summary.prefixAdded++;
+    if (d.delta.contextConfig?.prefix) summary.prefixAdded++;
     if (d.delta.loreBias && d.delta.loreBias.length > 0) summary.biased++;
   }
 

@@ -1704,6 +1704,10 @@ ipcMain.handle('lore:scan', async (event, { storyText, existingEntries, storyId,
       secondaryGenerateTextFn
     );
 
+    // Extract transient optimization data before saving (renderer-only, not persisted)
+    const pendingOptimizations = result.state._pendingOptimizations || [];
+    delete result.state._pendingOptimizations;
+
     // Save updated state
     db.setLoreState(storyId, result.state);
 
@@ -1759,7 +1763,7 @@ ipcMain.handle('lore:scan', async (event, { storyText, existingEntries, storyId,
       }
     }
 
-    return { success: true, ...result };
+    return { success: true, ...result, pendingOptimizations };
   } catch (e) {
     console.error('[Main] Lore scan failed:', e.message);
     return { success: false, error: e.message };
@@ -2149,16 +2153,6 @@ ipcMain.handle('lore:incremental-update', async (event, { storyId, storyText, ex
 // IPC Handlers — Lorebook Optimizer
 // ---------------------------------------------------------------------------
 
-ipcMain.handle('lore:inspect-entry', async () => {
-  // Proxied through renderer — returns field discovery results
-  return { success: true };
-});
-
-ipcMain.handle('lore:test-advanced-write', async () => {
-  // Proxied through renderer — returns write test results
-  return { success: true };
-});
-
 ipcMain.handle('lore:get-profiles', () => {
   return lorebookOptimizer.PROFILES;
 });
@@ -2171,12 +2165,22 @@ ipcMain.handle('lore:optimize-entries', async (event, { entries, profileId, stor
   try {
     const generateTextFn = makeLoreGenerateTextFn();
 
+    // Set up hybrid providers (same pattern as lore:scan)
+    let secondaryFn = null;
+    const primaryProvider = store.get('loreLlmProvider') || 'novelai';
+    if (primaryProvider === 'novelai') {
+      if (await isOllamaAvailable()) secondaryFn = makeOllamaGenerateTextFn();
+    } else {
+      secondaryFn = makeNovelaiGenerateTextFn();
+    }
+    const hybrid = loreCreator.createHybridProviders(generateTextFn, secondaryFn);
+
     // Load entity profiles from comprehension state
     const compState = db.getComprehension(storyId);
     const entityProfiles = (compState && compState.entityProfiles) || {};
 
     const result = await lorebookOptimizer.optimizeLoreEntries(
-      entries, profileId, entityProfiles, generateTextFn, confirmedFields,
+      entries, profileId, entityProfiles, hybrid.getProviders, confirmedFields,
       (progress) => {
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('lore:scan-progress', progress);
